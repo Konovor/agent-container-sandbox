@@ -1,0 +1,48 @@
+[project]
+name = "agent-container-sandbox"
+version = "0.1.0"
+description = "Docker container sandbox for LangChain Deep Agents, with the container lifecycle kept separate from the sandbox."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Konovor"}]
+keywords = ["langchain", "deepagents", "docker", "sandbox", "agents"]
+requires-python = ">=3.11"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Typing :: Typed",
+]
+dependencies = [
+    "deepagents>=0.7.0",
+    "docker>=7.2.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/Konovor/agent-container-sandbox"
+Issues = "https://github.com/Konovor/agent-container-sandbox/issues"
+
+[build-system]
+requires = ["uv_build>=0.9.17,<0.10.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "pytest-cov>=7.1.0",
+    "ruff>=0.16.9",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["integration: requires a running Docker daemon"]
+addopts = "-m 'not integration'"
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
