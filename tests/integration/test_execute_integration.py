@@ -148,3 +148,77 @@ def test_setsid_child_survives_the_timeout(sandbox):
     leftovers = sandbox.execute(_FIND_SLEEP_299)
 
     assert leftovers.exit_code == 0, "the detached process was killed after all"
+
+
+# === Output truncation ========================================================
+#
+# All tests use a 100-byte limit. The limit counts raw bytes, so a multibyte
+# character that straddles it must be dropped whole instead of being cut in half
+# (which would show up as a U+FFFD replacement character).
+
+_LIMIT = 100
+_TRUNCATION_MARKER = f"Output truncated at {_LIMIT} bytes."
+
+
+def _a(n: int) -> str:
+    """Shell snippet printing exactly n bytes of 'a' (no trailing newline)."""
+    return f"head -c {n} /dev/zero | tr '\\0' 'a'"
+
+
+# U+1F600 (4 bytes: F0 9F 98 80) as POSIX octal escapes; dash has no $'...'.
+_EMOJI_PRINTF = "printf '\\360\\237\\230\\200'"
+_EMOJI = "\U0001f600"
+
+
+@pytest.fixture
+def small_sandbox(make_sandbox):
+    return make_sandbox(max_output_size=_LIMIT)
+
+
+def test_output_over_the_limit_is_truncated(small_sandbox):
+    result = small_sandbox.execute(_a(200))
+
+    assert result.truncated is True
+    assert result.output.startswith("a" * _LIMIT + "\n\n")
+    assert _TRUNCATION_MARKER in result.output
+    assert "a" * (_LIMIT + 1) not in result.output
+
+
+def test_output_one_byte_over_the_limit_is_truncated(small_sandbox):
+    result = small_sandbox.execute(_a(_LIMIT + 1))
+
+    assert result.truncated is True
+    assert _TRUNCATION_MARKER in result.output
+
+
+def test_output_exactly_at_the_limit_is_not_truncated(small_sandbox):
+    result = small_sandbox.execute(_a(_LIMIT))
+
+    assert result.truncated is False
+    assert result.output == "a" * _LIMIT
+
+
+def test_multibyte_character_ending_exactly_at_the_limit_is_kept(small_sandbox):
+    result = small_sandbox.execute(f"{_a(_LIMIT - 4)}; {_EMOJI_PRINTF}")
+
+    assert result.truncated is False
+    assert result.output == "a" * (_LIMIT - 4) + _EMOJI
+
+
+@pytest.mark.parametrize("padding", [97, 98, 99])  # cut after 3, 2, 1 bytes of the emoji
+def test_multibyte_character_split_by_the_limit_is_dropped_whole(small_sandbox, padding):
+    result = small_sandbox.execute(f"{_a(padding)}; {_EMOJI_PRINTF}")
+
+    assert result.truncated is True
+    assert "\ufffd" not in result.output
+    assert _EMOJI not in result.output
+    assert result.output.startswith("a" * padding + "\n\n")
+    assert _TRUNCATION_MARKER in result.output
+
+
+def test_invalid_utf8_is_replaced_not_raised(sandbox):
+    result = sandbox.execute("printf '\\377\\376'")
+
+    assert result.exit_code == 0
+    assert result.output == "\ufffd\ufffd"
+    assert result.truncated is False
