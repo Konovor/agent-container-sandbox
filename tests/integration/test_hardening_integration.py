@@ -4,86 +4,20 @@ The unit tests mock the Docker client, so they only prove that we *pass* the
 right arguments. These tests prove that Docker actually applies them.
 
 Requirements:
-    - A running Docker daemon (the whole module is skipped if there is none).
+    - A running Docker daemon (the session aborts with a clear message if
+      there is none).
     - An image with ``sh``, ``sleep``, ``timeout`` and ``python3``. Override the
       default with the AGENT_SANDBOX_TEST_IMAGE environment variable.
 
 Run:
-    pytest tests/integration -m integration
-Skip in unit-test runs:
-    pytest -m "not integration"
+    pytest -m integration
 """
 
 from __future__ import annotations
 
-import logging
-import os
 import time
-import uuid
 
-import docker
-import pytest
-
-from agent_container_sandbox import (
-    ContainerProvisioner,
-    ContainerSandbox,
-    ContainerSpec,
-)
-
-pytestmark = pytest.mark.integration
-
-logger = logging.getLogger(__name__)
-
-IMAGE = os.environ.get(
-    "AGENT_SANDBOX_TEST_IMAGE",
-    "ghcr.io/astral-sh/uv:0.10.0-python3.13-trixie-slim",
-)
-
-# -- Fixtures -----------------------------------------------------------------
-
-
-@pytest.fixture(scope="module")
-def client():
-    try:
-        docker_client = docker.from_env()
-        docker_client.ping()
-    except Exception as e:  # daemon not installed, not running, or not reachable
-        pytest.skip(f"Docker daemon not available: {e}")
-    yield docker_client
-    docker_client.close()
-
-
-@pytest.fixture
-def provisioner(client):
-    return ContainerProvisioner(client)
-
-
-@pytest.fixture
-def make_container(provisioner):
-    """Factory that provisions containers and always deletes them afterwards.
-
-    Each test gets its own container, so tests that exhaust a limit (such as
-    the PID test) cannot disturb the others.
-    """
-    created = []
-
-    def _make(**spec_overrides):
-        spec = ContainerSpec(
-            image=IMAGE,
-            name=f"it-{uuid.uuid4().hex[:8]}",
-            **spec_overrides,
-        )
-        container = provisioner.provision(spec)
-        created.append(container)
-        return container
-
-    yield _make
-
-    for container in created:
-        try:
-            provisioner.delete(container)
-        except Exception:
-            logger.warning("Cleanup of %s failed", container.short_id, exc_info=True)
+from agent_container_sandbox import ContainerSandbox
 
 
 def _proc_status(sandbox: ContainerSandbox) -> dict[str, str]:
@@ -139,13 +73,25 @@ def test_container_config_reflects_defaults(make_container):
     container.reload()
     host_config = container.attrs["HostConfig"]
 
+    # TODO: Docker and Podman store some of these values differently
+    # (CapDrop, SecurityOpt, PidsLimit). If more runtime-specific workarounds
+    # pile up here, move them into one helper such as
+    # _normalized_host_config(container) that returns comparable values, so
+    # the quirks live in one place. Wait for a CI run on real Docker first,
+    # so the helper covers both runtimes' actual behavior.
     assert host_config["Init"] is True
     assert host_config["Memory"] == 2 * 1024**3
     assert host_config["MemorySwap"] == 2 * 1024**3
     assert host_config["NanoCpus"] == 2_000_000_000
     assert host_config["PidsLimit"] == 512
-    assert "ALL" in (host_config["CapDrop"] or [])
-    assert "no-new-privileges:true" in (host_config["SecurityOpt"] or [])
+
+    dropped = set(host_config["CapDrop"] or [])
+    # Docker stores ["ALL"]; Podman expands it to the explicit capability list.
+    assert "ALL" in dropped or {"CHOWN", "DAC_OVERRIDE", "SETUID", "SETGID"} <= dropped
+
+    security_opt = host_config["SecurityOpt"] or []
+    # Docker keeps "no-new-privileges:true"; Podman normalizes it to "no-new-privileges".
+    assert {"no-new-privileges:true", "no-new-privileges"} & set(security_opt)
 
 
 # === Overrides and opt-outs work ===============================================
@@ -177,7 +123,8 @@ def test_relaxed_spec_removes_the_restrictions(make_container):
     assert status["NoNewPrivs"] == "0"
     assert host_config["Memory"] == 0
     assert host_config["NanoCpus"] == 0
-    assert not host_config["PidsLimit"]  # unlimited (0 or None, depending on the Docker version)
+    # Unlimited is reported as -1 (Podman API), 0, or None, depending on runtime and version.
+    assert host_config["PidsLimit"] in (None, 0, -1)
 
 
 # === Lifecycle ==================================================================
