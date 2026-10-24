@@ -13,7 +13,7 @@ import pytest
 from docker.errors import APIError, ImageNotFound
 from docker.models.containers import Container
 
-from agent_container_sandbox import ContainerProvisioner, ContainerSpec
+from agent_container_sandbox import ContainerProvisioner, ContainerSandbox, ContainerSpec
 
 logger = logging.getLogger(__name__)
 
@@ -163,3 +163,36 @@ def make_container(
             provisioner.delete(container)
         except Exception:
             logger.warning("Cleanup of %s failed", container.short_id, exc_info=True)
+
+
+@pytest.fixture
+def container(make_container: Callable[..., Container]) -> Container:
+    """A fresh container with default spec. Deleted at test end."""
+    return make_container()
+
+
+@pytest.fixture
+def sandbox(container: Container) -> ContainerSandbox:
+    """A sandbox over the `container` fixture.
+
+    Request both fixtures in one test to get the sandbox and the container
+    behind it, for example to stop or delete the container mid-test.
+    """
+    return ContainerSandbox(container)
+
+
+@pytest.fixture
+def make_sandbox(
+    make_container: Callable[..., Container],
+) -> Callable[..., ContainerSandbox]:
+    """Build a sandbox with custom settings.
+
+    ``spec`` holds ContainerSpec overrides; all other keyword arguments go to
+    ContainerSandbox (``working_dir``, ``command_timeout``, ``max_output_size``).
+    Example: ``make_sandbox(max_output_size=100)``.
+    """
+
+    def _make(*, spec: dict | None = None, **sandbox_kwargs) -> ContainerSandbox:
+        return ContainerSandbox(make_container(**(spec or {})), **sandbox_kwargs)
+
+    return _make
