@@ -75,7 +75,8 @@ class ContainerSpec:
 def _hardening_kwargs(spec: ContainerSpec) -> dict[str, Any]:
     """Translate the spec's hardening fields into ``containers.run`` arguments.
 
-    Only settings that are enabled appear in the result.
+    Disabled settings are omitted, except ``pids_limit``: it is sent as -1
+    ("unlimited") so the daemon's own default cannot silently apply.
     """
     kwargs: dict[str, Any] = {}
     if spec.mem_limit is not None:
@@ -83,8 +84,9 @@ def _hardening_kwargs(spec: ContainerSpec) -> dict[str, Any]:
         kwargs["memswap_limit"] = spec.mem_limit  # no swap beyond the cap
     if spec.cpus is not None:
         kwargs["nano_cpus"] = int(spec.cpus * 1_000_000_000)
-    if spec.pids_limit is not None:
-        kwargs["pids_limit"] = spec.pids_limit
+    # Always sent. Omitting it would let the daemon apply its own default
+    # (2048 on Podman), so None would not actually mean "unlimited".
+    kwargs["pids_limit"] = spec.pids_limit if spec.pids_limit is not None else -1
     if spec.no_new_privileges:
         kwargs["security_opt"] = ["no-new-privileges:true"]
     if spec.cap_drop_all:
