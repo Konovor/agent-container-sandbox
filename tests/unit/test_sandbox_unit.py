@@ -153,6 +153,23 @@ def test_execute_timeout_messages_are_distinguishable(sandbox, mock_container, m
     assert "no response from docker" in fallback_result.output.lower()
 
 
+def test_execute_returns_str_error_when_exec_run_raises(sandbox, mock_container):
+    """A failing exec_run must produce a plain-string error, not a tuple.
+
+    Regression test: a trailing comma once turned the message into a
+    one-element tuple.
+    """
+    mock_container.exec_run.side_effect = RuntimeError("boom")
+
+    result = sandbox.execute("echo hi")
+
+    assert result.exit_code == 1
+    assert isinstance(result.output, str)
+    assert result.output.startswith(_SANDBOX_ERROR_PREFIX)
+    assert "RuntimeError: boom" in result.output
+    assert result.truncated is False
+
+
 # === upload_files() ============================================================
 
 
