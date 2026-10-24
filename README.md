@@ -185,7 +185,7 @@ Containers are hardened by default, to limit the damage an agent can do to the h
 
 Mention these limits in your system prompt or tool description, so the model can tell an exceeded limit from a bug in its own code.
 
-**Adjusting the defaults.** Set a field to `None` or `False` to remove a restriction, for example `ContainerSpec(image=IMAGE, mem_limit="8g", pids_limit=None)`. With all capabilities dropped, root inside the container loses some abilities. The most likely surprise is writing to a mounted host directory owned by another user, which needs `DAC_OVERRIDE`. `apt-get` needs `SETUID`, `SETGID`, and `CHOWN`. Add back only what you need with `cap_add=("CHOWN", "DAC_OVERRIDE")`.
+**Adjusting the defaults.** Set a field to `None` or `False` to remove a restriction, for example `ContainerSpec(image=IMAGE, mem_limit="8g", pids_limit=None)`. `pids_limit=None` sends an explicit unlimited value, so a daemon-wide default (Podman applies 2048, for example) cannot apply. With all capabilities dropped, root inside the container loses some abilities. The most likely surprise is writing to a mounted host directory owned by another user, which needs `DAC_OVERRIDE`. `apt-get` needs `SETUID`, `SETGID`, and `CHOWN`. Add back only what you need with `cap_add=("CHOWN", "DAC_OVERRIDE")`.
 
 **Verifying the setup.** Confirm that Docker applied the settings:
 

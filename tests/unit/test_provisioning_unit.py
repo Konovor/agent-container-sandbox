@@ -316,7 +316,12 @@ def test_provision_applies_hardening_defaults(provisioner, mock_client, spec):
 
 
 def test_provision_omits_hardening_when_disabled(provisioner, mock_client):
-    """Turning every setting off leaves the container unrestricted."""
+    """Turning every setting off leaves the container unrestricted.
+
+    Disabled settings are omitted from the run arguments, except pids_limit:
+    it is sent as -1 ("unlimited"), because omitting it would let the
+    daemon's own default (for example 2048 on Podman) apply.
+    """
     relaxed = ContainerSpec(
         image="test:image",
         name="test-container",
@@ -334,13 +339,13 @@ def test_provision_omits_hardening_when_disabled(provisioner, mock_client):
         "mem_limit",
         "memswap_limit",
         "nano_cpus",
-        "pids_limit",
         "security_opt",
         "cap_drop",
         "cap_add",
     ):
         assert key not in kw
-
+    # Not omitted like the others: an explicit "unlimited" overrides the daemon default.
+    assert kw["pids_limit"] == -1
 
 def test_provision_passes_cap_add_after_dropping_all(provisioner, mock_client):
     """Capabilities can be added back selectively."""
