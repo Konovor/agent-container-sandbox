@@ -158,8 +158,8 @@ with ManagedContainerSandbox(client, spec) as sandbox:
 | `client` | `DockerClient` | required | Your Docker client. Never closed by this class. |
 | `spec` | `ContainerSpec` | required | The container to provision. If `spec.name` is `None`, a unique name is generated. |
 | `working_dir` | `str \| None` | container's configured working directory | Passed to `ContainerSandbox`. |
-| `command_timeout` | `int` | `150` | Passed to `ContainerSandbox`. |
-| `max_output_size` | `int` | `65536` | Passed to `ContainerSandbox`. |
+| `command_timeout` | `int` | `150` | Passed to `ContainerSandbox`. Must be positive. |
+| `max_output_size` | `int` | `65536` | Passed to `ContainerSandbox`. Must be positive. |
 | `verify_timeout` | `bool` | `True` | Run `verify_timeout()` on entry, so an image without a usable `timeout` binary fails early. |
 
 - **Cleanup is guaranteed.** The container is deleted on exit, including when the body raises. If setup fails after the container was created (for example `MissingTimeoutError`), it is deleted before the exception propagates.
@@ -210,11 +210,12 @@ docker ps -a --filter label=created-by=agent-container-sandbox
 |-----------|------|---------|-------------|
 | `container` | `Container` | required | A running container. You own its lifecycle. |
 | `working_dir` | `str \| None` | container's configured working directory (`/` if none) | Directory for commands and relative paths. If omitted, it is read from the container's configuration, which for provisioned containers is `ContainerSpec.working_dir`. If you pass it explicitly, it must already exist. |
-| `command_timeout` | `int` | `150` | Default per-command timeout in seconds. |
-| `max_output_size` | `int` | `65536` | Output beyond this many bytes is truncated. |
+| `command_timeout` | `int` | `150` | Default per-command timeout in seconds. Must be positive. |
+| `max_output_size` | `int` | `65536` | Output beyond this many bytes is truncated. Must be positive. |
 
-`execute()` returns the deepagents `ExecuteResponse` (`output`, `exit_code`, `truncated`).
+A non-positive `command_timeout` or `max_output_size` raises `ValueError` in the constructor, before any call to Docker. `execute()` returns the deepagents `ExecuteResponse` (`output`, `exit_code`, `truncated`).
 
+- **`timeout` must be positive.** A per-call `timeout` of zero or less is rejected without running anything: `execute()` returns exit code `1` and a `Sandbox error:` message that names the value. Zero does not mean "no limit" here. For long-running commands, pass a large value instead.
 - **Timeouts are enforced inside the container.** Each command runs as `timeout -k 2 N sh -c <command>`: SIGTERM at the deadline, SIGKILL 2 seconds later if the process is still running. The exit code is `124` after a normal timeout. It is `137` when SIGKILL was needed, which is also the code for an out-of-memory kill. Processes that detach (`setsid`, double fork) can outlive `timeout`. Deleting the container is the only hard guarantee.
 - **Docker-level hangs are reported separately.** If Docker itself does not answer within the timeout plus 7 seconds, you get exit code `124` and a message that the command's state is unknown and the sandbox may be unhealthy. The command may still be running.
 - **Output is truncated by bytes**, without splitting a UTF-8 character, and `truncated` is set to `True`. Output is read fully into memory first, so avoid commands that print gigabytes.
@@ -252,7 +253,7 @@ except DockerImageNotFound as e:
     print(f"Could not get image {e.image}: {e}")
 ```
 
-Other failures, such as a container that cannot start or a daemon that is unreachable, surface as the underlying `docker-py` exceptions. Entering a `ManagedContainerSandbox` twice raises a plain `RuntimeError`, because that is a programming error.
+Other failures, such as a container that cannot start or a daemon that is unreachable, surface as the underlying `docker-py` exceptions. Entering a `ManagedContainerSandbox` twice raises a plain `RuntimeError`, and a non-positive `command_timeout` or `max_output_size` raises a plain `ValueError`, because both are programming errors.
 
 ## Known limitations
 

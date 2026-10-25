@@ -20,6 +20,7 @@ from .sandbox import (
     _DEFAULT_COMMAND_TIMEOUT,
     _DEFAULT_MAX_OUTPUT_SIZE,
     ContainerSandbox,
+    _validate_limits
 )
 
 logger = logging.getLogger(__name__)
@@ -63,6 +64,7 @@ class ManagedContainerSandbox:
         verify_timeout: bool = True,
     ) -> None:
         """Store configuration only. No Docker calls happen until ``__enter__``."""
+        _validate_limits(command_timeout=command_timeout, max_output_size=max_output_size)
         self._client = client
         self._spec = spec
         self._working_dir = working_dir

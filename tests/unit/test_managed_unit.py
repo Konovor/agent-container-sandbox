@@ -76,6 +76,19 @@ def test_public_surface_is_empty(managed):
     assert public == []
 
 
+@pytest.mark.parametrize(
+    "kwargs",
+    [{"command_timeout": 0}, {"command_timeout": -1},
+     {"max_output_size": 0}, {"max_output_size": -1}],
+)
+def test_managed_rejects_bad_limits_before_touching_docker(mock_client, kwargs):
+    with pytest.raises(ValueError):
+        ManagedContainerSandbox(mock_client, ContainerSpec(image="test:image"), **kwargs)
+
+    mock_client.images.get.assert_not_called()
+    mock_client.containers.run.assert_not_called()
+
+
 # === __enter__ =================================================================
 
 

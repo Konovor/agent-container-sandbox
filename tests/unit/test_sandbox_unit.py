@@ -170,6 +170,30 @@ def test_execute_returns_str_error_when_exec_run_raises(sandbox, mock_container)
     assert result.truncated is False
 
 
+@pytest.mark.parametrize("bad_timeout", [0, -1, -0.5])
+def test_execute_rejects_non_positive_timeout(sandbox, mock_container, bad_timeout):
+    """GNU timeout reads 0 as "no limit" and fails on negatives, so these
+    values are rejected before anything reaches the container."""
+    result = sandbox.execute("echo hi", timeout=bad_timeout)
+
+    assert result.exit_code == 1
+    assert result.output.startswith(_SANDBOX_ERROR_PREFIX)
+    assert "positive" in result.output
+    assert str(bad_timeout) in result.output
+    assert result.truncated is False
+    mock_container.exec_run.assert_not_called()
+
+
+def test_execute_accepts_small_positive_timeout(sandbox, mock_container):
+    """Guards against an over-eager check: fractional timeouts stay valid."""
+    mock_container.exec_run.return_value = (0, b"ok")
+
+    result = sandbox.execute("echo ok", timeout=0.05)
+
+    assert result.exit_code == 0
+    mock_container.exec_run.assert_called_once()
+
+
 # === upload_files() ============================================================
 
 
