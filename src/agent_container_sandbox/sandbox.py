@@ -69,6 +69,14 @@ def _extract_single_file(
         return f.read(), None
 
 
+def _validate_limits(*, command_timeout: int, max_output_size: int) -> None:
+    """Reject settings that have no sensible meaning. Raises ValueError."""
+    if command_timeout <= 0:
+        raise ValueError(f"command_timeout must be positive, got {command_timeout}.")
+    if max_output_size <= 0:
+        raise ValueError(f"max_output_size must be positive, got {max_output_size}.")
+
+
 class ContainerSandbox(BaseSandbox):
     """Deep Agents sandbox backed by an existing, running Docker container.
 
@@ -97,6 +105,7 @@ class ContainerSandbox(BaseSandbox):
         command_timeout: int = _DEFAULT_COMMAND_TIMEOUT,
         max_output_size: int = _DEFAULT_MAX_OUTPUT_SIZE,
     ) -> None:
+        _validate_limits(command_timeout=command_timeout, max_output_size=max_output_size)
         self._container = container
         self._working_dir = working_dir or self._discover_working_dir()
         self._default_timeout = command_timeout
@@ -118,7 +127,15 @@ class ContainerSandbox(BaseSandbox):
                 exit_code=1,
                 truncated=False,
             )
-
+        if timeout is not None and timeout <= 0:
+            return ExecuteResponse(
+                output=(
+                    f"{_SANDBOX_ERROR_PREFIX} timeout must be a positive "
+                    f"number of seconds (got {timeout})."
+                ),
+                exit_code=1,
+                truncated=False,
+            )
         effective_timeout = timeout if timeout is not None else self._default_timeout
 
         result_holder: dict[str, Any] = {}
