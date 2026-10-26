@@ -221,7 +221,7 @@ A non-positive `command_timeout` or `max_output_size` raises `ValueError` in the
 - **Output is truncated by bytes**, without splitting a UTF-8 character, and `truncated` is set to `True`. Output is read fully into memory first, so avoid commands that print gigabytes.
 - **Errors raised by the sandbox itself** are prefixed with `Sandbox error:` in `output`, to tell them apart from errors printed by your command.
 
-`download_files` reports problems per file in `FileDownloadResponse.error`: `"file_not_found"`, `"path_is_directory"`, or a message string for anything else. `upload_files` reports failures in `FileUploadResponse.error`. Neither raises for a single bad file.
+`download_files` reports problems per file in `FileDownloadResponse.error`: `"file_not_found"`, `"is_directory"`, or a message string for anything else. A container that no longer exists produces a message string, not `"file_not_found"`. `upload_files` reports failures in `FileUploadResponse.error`. Neither raises for a single bad file.
 
 `upload_files` never replaces an existing directory. If the target path is a directory, that file gets a per-file error and the directory is left untouched.
 

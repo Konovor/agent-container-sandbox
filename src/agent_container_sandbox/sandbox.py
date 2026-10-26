@@ -4,7 +4,6 @@ import codecs
 import io
 import logging
 import shlex
-import stat
 import tarfile
 import threading
 from typing import Any
@@ -25,6 +24,7 @@ logger = logging.getLogger(__name__)
 _DEFAULT_COMMAND_TIMEOUT = 150  # seconds
 _DEFAULT_MAX_OUTPUT_SIZE = 64 * 1024  # 64 KiB
 _KILL_DELAY = 2  # seconds to wait after sending SIGTERM before sending SIGKILL
+_GO_MODE_DIR = 1 << 31  # os.ModeDir: Docker's path stat uses Go's FileMode, not POSIX bits
 _TIMEOUT_GRACE_SECONDS = 5  # headroom for the container-side kill to land before we give up waiting
 _TIMEOUT_PROBE = "timeout -k 1 1 true"  # must match the form execute() uses
 _POSIX_TIMEOUT_EXIT_CODE = 124
@@ -55,13 +55,13 @@ def _build_single_file_tar(file_path: str, content: bytes) -> io.BytesIO:
     return tar_stream
 
 
-def _extract_single_file(
-    tar_data: io.BytesIO, path_stat: dict | None
-) -> tuple[bytes | None, str | None]:
+def _is_directory(path_stat: dict | None) -> bool:
+    return path_stat is not None and bool(path_stat.get("mode", 0) & _GO_MODE_DIR)
+
+
+def _extract_single_file(tar_data: io.BytesIO) -> tuple[bytes | None, str | None]:
     """Given a downloaded tar archive, return (content, error)."""
     with tarfile.open(fileobj=tar_data, mode="r") as tar:
-        if path_stat is not None and stat.S_ISDIR(path_stat.get("mode", 0)):
-            return None, "path_is_directory"
         members = tar.getmembers()
         f = tar.extractfile(members[0]) if members else None
         if f is None:
@@ -242,18 +242,31 @@ class ContainerSandbox(BaseSandbox):
         path = _resolve_path(file_path, self._working_dir)
         try:
             tar_stream, path_stat = self._container.get_archive(path)
+            if _is_directory(path_stat):
+                # Return before iterating: a large directory is never loaded into memory.
+                return FileDownloadResponse(path=file_path, content=None, error="is_directory")
             tar_data = io.BytesIO()
             for chunk in tar_stream:
                 tar_data.write(chunk)
             tar_data.seek(0)
-            content, error = _extract_single_file(tar_data, path_stat)
+            content, error = _extract_single_file(tar_data)
         except docker.errors.NotFound:
-            content, error = None, "file_not_found"
+            content, error = None, self._not_found_error(path)
         except Exception as e:
             error_msg = f"Failed to download {path}: {type(e).__name__}: {e}"
             logger.error("%s", error_msg)
             content, error = None, error_msg
         return FileDownloadResponse(path=file_path, content=content, error=error)
+
+    def _not_found_error(self, path: str) -> str:
+        """The daemon raises NotFound for a missing file and for a missing container."""
+        try:
+            self._container.reload()
+        except docker.errors.NotFound:
+            return f"Failed to download {path}: container no longer exists"
+        except Exception:
+            logger.debug("reload() failed while classifying NotFound", exc_info=True)
+        return "file_not_found"
 
     def download_files(self, paths: list[str]) -> list[FileDownloadResponse]:
         return [self._download_one(p) for p in paths]
