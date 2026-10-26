@@ -218,6 +218,14 @@ class ContainerSandbox(BaseSandbox):
                 if mkdir_result.exit_code != 0:
                     raise RuntimeError(f"mkdir -p {dir_path} failed: {mkdir_result.output}")
 
+                # put_archive would silently replace a directory with a file (observed
+                # on Podman), deleting its content. Not atomic with the write below.
+                check = self.execute(f"test -d {shlex.quote(file_path)}")
+                if check.exit_code == 0:
+                    raise IsADirectoryError(
+                        f"{file_path} is an existing directory; refusing to replace it"
+                    )
+
                 self._container.put_archive("/", tar_stream)
 
                 responses.append(FileUploadResponse(path=file_path, error=None))

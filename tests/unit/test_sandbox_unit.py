@@ -41,6 +41,22 @@ def _tar_bytes(name: str, content: bytes) -> bytes:
     return stream.getvalue()
 
 
+def _fake_exec_run(directories=()):
+    """exec_run stub: `test -d <path>` succeeds only for paths in `directories`."""
+    calls = []
+
+    def fake(cmd, **kwargs):
+        text = " ".join(cmd) if isinstance(cmd, (list, tuple)) else str(cmd)
+        calls.append(text)
+        if "test -d" in text:
+            is_dir = any(d in text for d in directories)
+            return (0 if is_dir else 1, b"")
+        return (0, b"")  # mkdir -p and anything else
+
+    fake.calls = calls
+    return fake
+
+
 # === execute() ================================================================
 
 
@@ -199,6 +215,8 @@ def test_execute_accepts_small_positive_timeout(sandbox, mock_container):
 
 def test_upload_root_level_file_builds_valid_mkdir(sandbox, mock_container):
     """Uploading /file.txt must run `mkdir -p /`, not `mkdir -p ` (no operand)."""
+    mock_container.exec_run.side_effect = _fake_exec_run()  # target is not a directory
+
     results = sandbox.upload_files([("/file.txt", b"data")])
 
     assert results[0].error is None
@@ -218,6 +236,8 @@ def test_upload_root_level_file_builds_valid_mkdir(sandbox, mock_container):
 def test_upload_quotes_path_with_space(sandbox, mock_container):
     """A directory path containing a space must reach the shell as a single
     quoted argument, not be split into two mkdir operands."""
+    mock_container.exec_run.side_effect = _fake_exec_run()  # target is not a directory
+
     results = sandbox.upload_files([("/workspace/my dir/x.txt", b"data")])
 
     assert results[0].error is None
@@ -244,6 +264,48 @@ def test_upload_aborts_when_mkdir_fails(sandbox, mock_container):
     assert results[0].error is not None
     assert "mkdir" in results[0].error.lower()
     mock_container.put_archive.assert_not_called()
+
+
+def test_upload_onto_existing_directory_reports_error_and_does_not_write(
+    sandbox, mock_container
+):
+    mock_container.exec_run.side_effect = _fake_exec_run(
+        directories=["/workspace/adir"]
+    )
+
+    [response] = sandbox.upload_files([("adir", b"data")])
+
+    mock_container.put_archive.assert_not_called()
+    assert response.error is not None
+    assert response.error.startswith("Failed to upload")
+    assert "directory" in response.error
+
+
+def test_upload_onto_non_directory_checks_and_writes(sandbox, mock_container):
+    fake = _fake_exec_run(directories=[])
+    mock_container.exec_run.side_effect = fake
+
+    [response] = sandbox.upload_files([("file.txt", b"data")])
+
+    assert any("test -d" in c for c in fake.calls)  # check ran (fails without fix)
+    mock_container.put_archive.assert_called_once()
+    assert response.error is None
+
+
+def test_upload_batch_directory_target_does_not_stop_other_files(
+    sandbox, mock_container
+):
+    mock_container.exec_run.side_effect = _fake_exec_run(
+        directories=["/workspace/adir"]
+    )
+
+    first, second = sandbox.upload_files([("adir", b"a"), ("ok.txt", b"b")])
+
+    assert first.path == "/workspace/adir"
+    assert first.error is not None and "directory" in first.error
+    assert second.path == "/workspace/ok.txt"
+    assert second.error is None
+    mock_container.put_archive.assert_called_once()
 
 
 # === download_files() ==========================================================

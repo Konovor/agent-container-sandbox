@@ -223,6 +223,8 @@ A non-positive `command_timeout` or `max_output_size` raises `ValueError` in the
 
 `download_files` reports problems per file in `FileDownloadResponse.error`: `"file_not_found"`, `"path_is_directory"`, or a message string for anything else. `upload_files` reports failures in `FileUploadResponse.error`. Neither raises for a single bad file.
 
+`upload_files` never replaces an existing directory. If the target path is a directory, that file gets a per-file error and the directory is left untouched.
+
 ### Checking a container
 
 Every `execute()` call needs `timeout` inside the container. `ContainerProvisioner` does not check for it, because its own keep-alive command does not use it. If your image might lack `timeout`, or you hand `ContainerSandbox` a container you did not provision, check once up front:
