@@ -1,7 +1,6 @@
 """Unit tests for sandbox: no Docker daemon required."""
 
 import io
-import stat
 import tarfile
 import threading
 from unittest.mock import MagicMock
@@ -11,6 +10,16 @@ import pytest
 
 from agent_container_sandbox import ContainerSandbox
 from agent_container_sandbox.sandbox import _KILL_DELAY, _SANDBOX_ERROR_PREFIX
+
+GO_DIR_HEADER = {
+    "name": "d",
+    "size": 4096,
+    "mode": 2147484141,  # os.ModeDir | 0o755, as returned by a real daemon
+    "mtime": "2026-10-26T10:27:52.138523393+01:00",
+    "isDir": True,
+    "linkTarget": "/workspace/d",
+}
+
 
 # -- Fixtures: creating the fake Docker world -------------------------------
 
@@ -320,18 +329,7 @@ def test_download_missing_file_returns_file_not_found(sandbox, mock_container):
     assert len(results) == 1
     assert results[0].content is None
     assert results[0].error == "file_not_found"
-
-
-def test_download_directory_returns_path_is_directory(sandbox, mock_container):
-    """A path whose stat reports a directory maps to path_is_directory."""
-    tar_bytes = _tar_bytes("workspace/some_dir", b"")
-    dir_stat = {"mode": stat.S_IFDIR | 0o755}
-    mock_container.get_archive.return_value = (iter([tar_bytes]), dir_stat)
-
-    results = sandbox.download_files(["/workspace/some_dir"])
-
-    assert results[0].content is None
-    assert results[0].error == "path_is_directory"
+    mock_container.reload.assert_called()
 
 
 def test_download_happy_path(sandbox, mock_container):
@@ -345,3 +343,60 @@ def test_download_happy_path(sandbox, mock_container):
     assert results[0].content == b"hello world"
     assert results[0].error is None
     assert results[0].path == "/workspace/test.txt"  # echoes the requested path
+
+
+def test_download_directory_returns_is_directory_without_reading_the_stream(
+    sandbox, mock_container
+):
+    """A directory is detected from the header alone, so a large directory is
+    never loaded into memory."""
+    consumed = []
+
+    def stream():
+        consumed.append(True)
+        yield _tar_bytes("workspace/d", b"")
+
+    mock_container.get_archive.return_value = (stream(), GO_DIR_HEADER)
+
+    [response] = sandbox.download_files(["/workspace/d"])
+
+    assert response.content is None
+    assert response.error == "is_directory"
+    assert consumed == []
+
+
+def test_download_from_removed_container_is_not_reported_as_missing_file(sandbox, mock_container):
+    mock_container.get_archive.side_effect = docker.errors.NotFound("no such file")
+    mock_container.reload.side_effect = docker.errors.NotFound("no such container")
+
+    [response] = sandbox.download_files(["/workspace/x.txt"])
+
+    assert response.content is None
+    assert response.error != "file_not_found"
+    assert "container no longer exists" in response.error
+
+
+def test_download_reload_failure_while_classifying_does_not_raise(sandbox, mock_container):
+    mock_container.get_archive.side_effect = docker.errors.NotFound("no such file")
+    mock_container.reload.side_effect = docker.errors.APIError("daemon hiccup")
+
+    [response] = sandbox.download_files(["/workspace/x.txt"])
+
+    assert response.error == "file_not_found"
+
+
+def test_download_batch_keeps_order_across_outcomes(sandbox, mock_container):
+    def get_archive(path):
+        if path == "/workspace/d":
+            return iter([]), GO_DIR_HEADER
+        if path == "/workspace/ok.txt":
+            return iter([_tar_bytes("workspace/ok.txt", b"hi")]), {"mode": 0o644}
+        raise docker.errors.NotFound("no such file")
+
+    mock_container.get_archive.side_effect = get_archive
+
+    responses = sandbox.download_files(["ok.txt", "d", "missing.txt"])
+
+    assert [r.path for r in responses] == ["ok.txt", "d", "missing.txt"]
+    assert [r.content for r in responses] == [b"hi", None, None]
+    assert [r.error for r in responses] == [None, "is_directory", "file_not_found"]
