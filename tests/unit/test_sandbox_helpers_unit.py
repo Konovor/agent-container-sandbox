@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import io
-import stat
 import tarfile
 
-from agent_container_sandbox.sandbox import _decode_and_truncate, _extract_single_file
+from agent_container_sandbox.sandbox import (
+    _decode_and_truncate,
+    _extract_single_file,
+    _is_directory,
+)
 
 # -- Helpers to build test fixtures ------------------------------------------
 
@@ -82,21 +85,10 @@ def test_extract_single_file_returns_content_for_normal_file():
     """A normal file entry is read back with no error."""
     tar_data = _make_tar("workspace/test.txt", b"hello world")
 
-    content, error = _extract_single_file(tar_data, path_stat=None)
+    content, error = _extract_single_file(tar_data)
 
     assert content == b"hello world"
     assert error is None
-
-
-def test_extract_single_file_directory_stat_returns_error():
-    """A path whose stat mode is a directory is rejected before reading."""
-    tar_data = _make_tar("workspace/some_dir", b"")  # content is irrelevant here
-    dir_stat = {"mode": stat.S_IFDIR | 0o755}
-
-    content, error = _extract_single_file(tar_data, path_stat=dir_stat)
-
-    assert content is None
-    assert error == "path_is_directory"
 
 
 def test_extract_single_file_empty_archive_returns_file_not_found():
@@ -104,7 +96,30 @@ def test_extract_single_file_empty_archive_returns_file_not_found():
     treated as a missing file rather than raising."""
     tar_data = _make_empty_tar()
 
-    content, error = _extract_single_file(tar_data, path_stat=None)
+    content, error = _extract_single_file(tar_data)
 
     assert content is None
     assert error == "file_not_found"
+
+
+# -- _is_directory ------------------------------------------------------------
+
+
+def test_is_directory_true_for_real_go_filemode():
+    """Header from container.get_archive on a directory: os.ModeDir (bit 31) | 0o755."""
+    assert _is_directory({"mode": 2147484141}) is True
+
+
+def test_is_directory_false_for_regular_file_mode():
+    assert _is_directory({"mode": 0o644}) is False
+
+
+def test_is_directory_ignores_posix_directory_bits():
+    """POSIX S_IFDIR is not what Docker sends. Treating it as a directory flag
+    is the original bug's blind spot."""
+    assert _is_directory({"mode": 0o040755}) is False
+
+
+def test_is_directory_false_without_usable_header():
+    assert _is_directory(None) is False
+    assert _is_directory({}) is False
