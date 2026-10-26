@@ -150,6 +150,20 @@ def test_setsid_child_survives_the_timeout(sandbox):
     assert leftovers.exit_code == 0, "the detached process was killed after all"
 
 
+@pytest.mark.parametrize("bad_timeout", [0, -1])
+def test_non_positive_timeout_is_rejected(sandbox, bad_timeout):
+    """GNU timeout reads 0 as "no limit" and rejects negatives, which would
+    leave execute() waiting for the wrong thing. Both are rejected up front."""
+    start = time.monotonic()
+    result = sandbox.execute("sleep 30", timeout=bad_timeout)
+    elapsed = time.monotonic() - start
+
+    assert result.exit_code == 1
+    assert result.output.startswith("Sandbox error:")
+    assert "positive" in result.output
+    assert elapsed < 5, "the command should not even have started"
+
+
 # === Output truncation ========================================================
 #
 # All tests use a 100-byte limit. The limit counts raw bytes, so a multibyte
