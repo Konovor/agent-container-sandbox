@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import io
 import tarfile
+import time
 
 from agent_container_sandbox.sandbox import (
+    _build_single_file_tar,
     _decode_and_truncate,
     _extract_single_file,
     _is_directory,
@@ -33,6 +35,33 @@ def _make_empty_tar() -> io.BytesIO:
         pass
     stream.seek(0)
     return stream
+
+
+# -- _build_single_file_tar ---------------------------------------------------
+
+
+def test_build_single_file_tar_stamps_the_current_time():
+    """Regression test: TarInfo.mtime defaults to 0, which dated every
+    uploaded file 1 January 1970 and confused anything that compares
+    timestamps (make, find -newer, ...)."""
+    before = int(time.time())
+
+    tar_stream = _build_single_file_tar("/workspace/a.txt", b"data")
+
+    after = int(time.time())
+    with tarfile.open(fileobj=tar_stream, mode="r") as tar:
+        [member] = tar.getmembers()
+    assert before <= member.mtime <= after
+
+
+def test_build_single_file_tar_strips_the_leading_slash_and_keeps_content():
+    """put_archive extracts relative to "/", so the member name must not start with a slash."""
+    tar_stream = _build_single_file_tar("/workspace/a.txt", b"data")
+
+    with tarfile.open(fileobj=tar_stream, mode="r") as tar:
+        [member] = tar.getmembers()
+        assert member.name == "workspace/a.txt"
+        assert tar.extractfile(member).read() == b"data"
 
 
 # -- _decode_and_truncate -----------------------------------------------------
