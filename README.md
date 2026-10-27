@@ -18,7 +18,10 @@ uv add git+https://github.com/Konovor/agent-container-sandbox
 **Prerequisites**
 
 - Docker installed and running.
-- An image that provides `sh`, `sleep`, and `timeout` (GNU coreutils or compatible). Very minimal images (for example `scratch`-based ones) will not work. The recommended image works out of the box:
+- An image that provides `sh`, `sleep`, and `timeout` (GNU coreutils). Very minimal images (for example `scratch`-based ones) will not work.
+- `python3` in the image, if you use the file helpers inherited from `BaseSandbox` (`read`, `write`, `edit`, `ls`, `grep`, `glob`). They run Python inside the container, and without it `ls` and `grep` return empty results instead of an error. `execute`, `upload_files` and `download_files` do not need it.
+
+The recommended image meets all of this:
 
 ```bash
 docker pull ghcr.io/astral-sh/uv:0.10.0-python3.13-trixie-slim
@@ -216,7 +219,7 @@ docker ps -a --filter label=created-by=agent-container-sandbox
 A non-positive `command_timeout` or `max_output_size` raises `ValueError` in the constructor, before any call to Docker. `execute()` returns the deepagents `ExecuteResponse` (`output`, `exit_code`, `truncated`).
 
 - **`timeout` must be positive.** A per-call `timeout` of zero or less is rejected without running anything: `execute()` returns exit code `1` and a `Sandbox error:` message that names the value. Zero does not mean "no limit" here. For long-running commands, pass a large value instead.
-- **Timeouts are enforced inside the container.** Each command runs as `timeout -k 2 N sh -c <command>`: SIGTERM at the deadline, SIGKILL 2 seconds later if the process is still running. The exit code is `124` after a normal timeout. It is `137` when SIGKILL was needed, which is also the code for an out-of-memory kill. Processes that detach (`setsid`, double fork) can outlive `timeout`. Deleting the container is the only hard guarantee.
+- **Timeouts are enforced inside the container.** Each command runs as `timeout -k 2 N sh -c <command>`: SIGTERM at the deadline, SIGKILL 2 seconds later if the process is still running. The exit code is `124` after a normal timeout. It is `137` when SIGKILL was needed, which is also the code for an out-of-memory kill. Busybox-based images such as Alpine report `143` instead, without the "timed out" note. Processes that detach (`setsid`, double fork) can outlive `timeout`. Deleting the container is the only hard guarantee.
 - **Docker-level hangs are reported separately.** If Docker itself does not answer within the timeout plus 7 seconds, you get exit code `124` and a message that the command's state is unknown and the sandbox may be unhealthy. The command may still be running.
 - **Output is truncated by bytes**, without splitting a UTF-8 character, and `truncated` is set to `True`. Output is read fully into memory first, so avoid commands that print gigabytes.
 - **Errors raised by the sandbox itself** are prefixed with `Sandbox error:` in `output`, to tell them apart from errors printed by your command.
@@ -234,7 +237,7 @@ sandbox = ContainerSandbox(container)
 sandbox.verify_timeout()  # raises MissingTimeoutError if `timeout` is unusable
 ```
 
-Without the check, every `execute()` call fails with exit code `127` and an "executable file not found in $PATH" message from the container runtime in `output`. `execute()` does not raise, so an agent would see this on every command and may misread it as a problem with its own code. `verify_timeout()` turns it into a single `MissingTimeoutError` at setup time. `ManagedContainerSandbox` runs this check for you by default.
+Without the check, every `execute()` call fails with exit code `127` and an "executable file not found in $PATH" message from the container runtime in `output`. `execute()` does not raise, so an agent would see this on every command and may misread it as a problem with its own code. `verify_timeout()` turns it into a single `MissingTimeoutError` at setup time. `ManagedContainerSandbox` runs this check for you by default. `verify_timeout()` checks only for `timeout`, not for `python3`.
 
 ## Errors
 
