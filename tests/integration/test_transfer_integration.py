@@ -244,11 +244,6 @@ def test_uploaded_file_has_default_mode_and_owner(sandbox):
     assert result.output.strip() == "644 root"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="TarInfo.mtime defaults to 0, so uploaded files are dated 1970. "
-    "Undecided whether that needs fixing; remove the marker if it is changed.",
-)
 def test_uploaded_file_has_a_plausible_modification_time(sandbox):
     _put(sandbox, "mtime.txt", b"x")
 
