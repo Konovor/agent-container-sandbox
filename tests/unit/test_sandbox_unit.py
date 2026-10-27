@@ -323,6 +323,7 @@ def test_upload_batch_directory_target_does_not_stop_other_files(
 def test_download_missing_file_returns_file_not_found(sandbox, mock_container):
     """A NotFound from the container maps to the file_not_found error code."""
     mock_container.get_archive.side_effect = docker.errors.NotFound("no such file")
+    mock_container.reload.reset_mock()  # the constructor already called it once
 
     results = sandbox.download_files(["/workspace/nope.txt"])
 

@@ -6,6 +6,7 @@ import logging
 import shlex
 import tarfile
 import threading
+import time
 from typing import Any
 
 import docker
@@ -50,6 +51,7 @@ def _build_single_file_tar(file_path: str, content: bytes) -> io.BytesIO:
     with tarfile.open(fileobj=tar_stream, mode="w") as tar:
         info = tarfile.TarInfo(name=file_path.lstrip("/"))
         info.size = len(content)
+        info.mtime = int(time.time())  # TarInfo defaults to 0, which dates files 1970
         tar.addfile(info, io.BytesIO(content))
     tar_stream.seek(0)
     return tar_stream
