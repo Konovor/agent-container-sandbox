@@ -146,18 +146,13 @@ def test_batch_download_keeps_order_and_reports_per_file(sandbox):
     assert [r.error for r in responses] == [None, "file_not_found", None]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="Suspected defect: stat.S_ISDIR checks POSIX bits, but Docker's path "
-    "stat carries Go's os.FileMode (directory flag is bit 31).",
-)
-def test_downloading_a_directory_reports_path_is_directory(sandbox):
+def test_downloading_a_directory_reports_is_directory(sandbox):
     sandbox.execute("mkdir -p /workspace/somedir && echo x > /workspace/somedir/f.txt")
 
     [response] = sandbox.download_files(["somedir"])
 
     assert response.content is None
-    assert response.error == "path_is_directory"
+    assert response.error == "is_directory"
 
 
 def test_downloading_a_symlink_does_not_raise(sandbox):
@@ -224,11 +219,6 @@ def test_upload_to_a_removed_container_reports_an_error_without_raising(
     assert response.error.startswith("Failed to upload")
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="Suspected defect: docker.errors.NotFound is mapped to file_not_found, "
-    "but the daemon raises the same exception for a missing container.",
-)
 def test_download_from_a_removed_container_does_not_claim_the_file_is_missing(
     container, sandbox, provisioner
 ):
