@@ -35,7 +35,10 @@ def test_binary_round_trip_with_all_byte_values(sandbox):
 
     _put(sandbox, "all-bytes.bin", data)
 
-    assert _sha256_in_container(sandbox, "/workspace/all-bytes.bin") == hashlib.sha256(data).hexdigest()
+    assert (
+        _sha256_in_container(sandbox, "/workspace/all-bytes.bin")
+        == hashlib.sha256(data).hexdigest()
+    )
     [downloaded] = sandbox.download_files(["all-bytes.bin"])
     assert downloaded.error is None
     assert downloaded.content == data

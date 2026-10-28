@@ -27,9 +27,7 @@ def test_execute_on_stopped_container_returns_error_response(container, sandbox)
     assert result.truncated is False
 
 
-def test_execute_on_removed_container_returns_error_response(
-    container, sandbox, provisioner
-):
+def test_execute_on_removed_container_returns_error_response(container, sandbox, provisioner):
     provisioner.delete(container)
 
     result = sandbox.execute("echo hello")  # must not raise

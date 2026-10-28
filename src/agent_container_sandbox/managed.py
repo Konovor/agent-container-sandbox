@@ -20,7 +20,7 @@ from .sandbox import (
     _DEFAULT_COMMAND_TIMEOUT,
     _DEFAULT_MAX_OUTPUT_SIZE,
     ContainerSandbox,
-    _validate_limits
+    _validate_limits,
 )
 
 logger = logging.getLogger(__name__)
