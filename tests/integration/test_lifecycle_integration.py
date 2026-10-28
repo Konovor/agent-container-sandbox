@@ -62,9 +62,7 @@ def test_container_is_deleted_on_keyboard_interrupt(client, make_spec):
 
 
 @pytest.mark.parametrize("action", ["stop", "remove"])
-def test_exit_tolerates_a_container_stopped_or_removed_inside_the_block(
-    client, make_spec, action
-):
+def test_exit_tolerates_a_container_stopped_or_removed_inside_the_block(client, make_spec, action):
     spec = make_spec()
 
     with ManagedContainerSandbox(client, spec) as sandbox:
@@ -176,13 +174,14 @@ def test_delete_removes_a_stopped_container(client, provisioner, make_container)
     assert not _exists(client, container.name)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="provision() uses containers.run(), so a container whose start fails "
-    "is created but never deleted.",
-)
 def test_failed_start_leaves_no_container_behind(client, provisioner, make_spec):
-    spec = make_spec(working_dir="/proc/nope")  # the runtime cannot create this directory
+    # working_dir="/proc/nope" makes the runtime fail during container init as it
+    # cannot create the directory. The runtime fails after the container is created
+    # but before the entrypoint runs, so the container exists briefly and needs to
+    # be cleaned up. The test checks that the library does not leak the container
+    # even if the runtime fails after the container was created. Verified on Podman;
+    # runc-based Docker should behave the same.
+    spec = make_spec(working_dir="/proc/nope")
 
     with pytest.raises(docker.errors.APIError):
         provisioner.provision(spec)
