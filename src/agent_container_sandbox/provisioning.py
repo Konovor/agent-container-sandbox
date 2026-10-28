@@ -73,7 +73,7 @@ class ContainerSpec:
 
 
 def _hardening_kwargs(spec: ContainerSpec) -> dict[str, Any]:
-    """Translate the spec's hardening fields into ``containers.run`` arguments.
+    """Translate the spec's hardening fields into ``containers.create`` arguments.
 
     Disabled settings are omitted, except ``pids_limit``: it is sent as -1
     ("unlimited") so the daemon's own default cannot silently apply.
@@ -132,28 +132,38 @@ class ContainerProvisioner:
                 raise DockerImageNotFound(image, detail=f"Pulling it failed: {e}") from e
 
     def provision(self, spec: ContainerSpec) -> Container:
-        """Create a new container from ``spec`` and prepare it for use."""
+        """Create and start a new container from ``spec`` and prepare it for use.
+
+        If anything fails after the container has been created (starting it or
+        creating the working directory), the container is deleted before the
+        exception propagates, so a failed call never leaves a container behind.
+        If creation itself fails (for example a name conflict), nothing is
+        deleted: no container was created by this call.
+        """
         self._check_image(spec.image, auto_pull=True)
         name = spec.name or f"agent-container-sandbox-{uuid.uuid4().hex[:12]}"
         # The main process is only a placeholder that keeps the container alive;
         # real work arrives later via exec_run. The entrypoint is set explicitly so
         # an image's own ENTRYPOINT cannot interfere, and init=True runs it behind
         # tini so SIGTERM is forwarded and orphaned child processes are reaped.
-        container = self._client.containers.run(
+        container = self._client.containers.create(
             image=spec.image,
             name=name,
             entrypoint=["sleep", str(spec.max_lifetime_seconds)],
             working_dir=spec.working_dir,
             volumes=spec.volumes,
             labels={**spec.labels, _MARKER_LABEL_KEY: _MARKER_LABEL_VALUE},
-            detach=True,
             stdin_open=False,
             init=True,
             tty=False,
             **_hardening_kwargs(spec),
         )
 
+        # Everything from here on may leave a created container behind, so start()
+        # belongs inside the try. create() stays outside: if it raises, no container
+        # was assigned and a same-named one belongs to someone else.
         try:
+            container.start()
             exit_code, output_bytes = container.exec_run(
                 cmd=["sh", "-c", f"mkdir -p {shlex.quote(spec.working_dir)}"],
                 workdir=spec.working_dir,
