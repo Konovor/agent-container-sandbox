@@ -38,11 +38,11 @@ def mock_container():
 
 @pytest.fixture
 def mock_client(mock_container):
-    """A fake Docker client: image check passes, containers.run hands out the
+    """A fake Docker client: image check passes, containers.create hands out the
     fake container."""
     client = MagicMock()
     client.images.get.return_value = MagicMock()
-    client.containers.run.return_value = mock_container
+    client.containers.create.return_value = mock_container
     return client
 
 
@@ -65,7 +65,7 @@ def test_construction_makes_no_docker_calls(mock_client, spec):
     ManagedContainerSandbox(mock_client, spec)
 
     mock_client.images.get.assert_not_called()
-    mock_client.containers.run.assert_not_called()
+    mock_client.containers.create.assert_not_called()
 
 
 def test_public_surface_is_empty(managed):
@@ -86,7 +86,7 @@ def test_managed_rejects_bad_limits_before_touching_docker(mock_client, kwargs):
         ManagedContainerSandbox(mock_client, ContainerSpec(image="test:image"), **kwargs)
 
     mock_client.images.get.assert_not_called()
-    mock_client.containers.run.assert_not_called()
+    mock_client.containers.create.assert_not_called()
 
 
 # === __enter__ =================================================================
@@ -99,17 +99,17 @@ def test_enter_returns_sandbox_over_provisioned_container(managed, mock_client):
         assert isinstance(sandbox, ContainerSandbox)
         assert sandbox.id == "abc123"
 
-    mock_client.containers.run.assert_called_once()
+    mock_client.containers.create.assert_called_once()
 
 
 def test_enter_provisions_from_the_given_spec(mock_client):
-    """The spec's name and the marker label reach containers.run."""
+    """The spec's name and the marker label reach containers.create."""
     spec = ContainerSpec(image="test:image", name="my-sandbox", labels={"team": "x"})
 
     with ManagedContainerSandbox(mock_client, spec):
         pass
 
-    run_kwargs = mock_client.containers.run.call_args.kwargs
+    run_kwargs = mock_client.containers.create.call_args.kwargs
     assert run_kwargs["name"] == "my-sandbox"
     assert run_kwargs["labels"]["team"] == "x"
     assert run_kwargs["labels"]["created-by"] == "agent-container-sandbox"
@@ -226,9 +226,9 @@ def test_enter_cleans_up_on_keyboard_interrupt(managed, mock_container, monkeypa
 
 
 def test_enter_does_not_delete_when_provisioning_itself_fails(managed, mock_client, mock_container):
-    """If containers.run fails there is no container, so the managed layer
+    """If containers.create fails there is no container, so the managed layer
     must not try to delete anything."""
-    mock_client.containers.run.side_effect = docker.errors.APIError("boom")
+    mock_client.containers.create.side_effect = docker.errors.APIError("boom")
 
     with pytest.raises(docker.errors.APIError):
         managed.__enter__()
@@ -373,7 +373,7 @@ def test_nested_reentry_raises_without_touching_the_running_container(
 
         mock_container.stop.assert_not_called()
 
-    assert mock_client.containers.run.call_count == 1
+    assert mock_client.containers.create.call_count == 1
     mock_container.stop.assert_called_once()
 
 
@@ -387,7 +387,7 @@ def test_reentry_after_exit_raises(managed, mock_client):
         with managed:
             pass
 
-    assert mock_client.containers.run.call_count == 1
+    assert mock_client.containers.create.call_count == 1
 
 
 def test_instance_is_burned_even_when_first_enter_fails(managed, mock_container):

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from unittest.mock import MagicMock
 
@@ -30,11 +31,12 @@ def mock_container():
 
 @pytest.fixture
 def mock_client(mock_container):
-    """A fake Docker client: image check passes by default, containers.run
-    hands out the fake container."""
+    """A fake Docker client. The image check passes by default, and
+    containers.create hands out the fake container (whose start() and
+    exec_run() succeed by default, see mock_container)."""
     client = MagicMock()
     client.images.get.return_value = MagicMock()  # image "found" by default
-    client.containers.run.return_value = mock_container
+    client.containers.create.return_value = mock_container
     return client
 
 
@@ -82,11 +84,11 @@ def test_check_image_does_not_pull_by_default(provisioner, mock_client):
 def test_provision_happy_path_returns_the_running_container(
     provisioner, mock_client, mock_container, spec
 ):
-    """A successful provision returns exactly what containers.run produced."""
+    """A successful provision returns exactly what containers.create produced."""
     result = provisioner.provision(spec)
 
     assert result is mock_container
-    mock_client.containers.run.assert_called_once()
+    mock_client.containers.create.assert_called_once()
 
 
 def test_provision_applies_marker_label_merged_with_spec_labels(provisioner, mock_client, spec):
@@ -97,8 +99,8 @@ def test_provision_applies_marker_label_merged_with_spec_labels(provisioner, moc
 
     provisioner.provision(spec_with_labels)
 
-    run_kwargs = mock_client.containers.run.call_args.kwargs
-    labels = run_kwargs["labels"]
+    create_kwargs = mock_client.containers.create.call_args.kwargs
+    labels = create_kwargs["labels"]
     assert labels["created-by"] == "agent-container-sandbox"
     assert labels["team"] == "x"
 
@@ -112,9 +114,9 @@ def test_provision_uses_sleep_entrypoint_with_max_lifetime(provisioner, mock_cli
 
     provisioner.provision(spec_with_lifetime)
 
-    run_kwargs = mock_client.containers.run.call_args.kwargs
-    assert run_kwargs["entrypoint"] == ["sleep", "1800"]
-    assert "command" not in run_kwargs
+    create_kwargs = mock_client.containers.create.call_args.kwargs
+    assert create_kwargs["entrypoint"] == ["sleep", "1800"]
+    assert "command" not in create_kwargs
 
 
 def test_provision_runs_keepalive_behind_init_process(provisioner, mock_client, spec):
@@ -123,23 +125,21 @@ def test_provision_runs_keepalive_behind_init_process(provisioner, mock_client, 
     period."""
     provisioner.provision(spec)
 
-    run_kwargs = mock_client.containers.run.call_args.kwargs
-    assert run_kwargs["init"] is True
+    create_kwargs = mock_client.containers.create.call_args.kwargs
+    assert create_kwargs["init"] is True
 
 
-def test_provision_deletes_container_when_mkdir_fails(
-    provisioner, mock_client, mock_container, spec
-):
+def test_provision_deletes_container_when_mkdir_fails(provisioner, mock_container, spec):
     """If creating the working directory fails, the just-created container
     must be cleaned up before the exception propagates — a failed provision
     must not leak a container."""
     mock_container.exec_run.return_value = (1, b"mkdir: permission denied")
-    mock_container.status = "running"
+
     with pytest.raises(RuntimeError, match="mkdir"):
         provisioner.provision(spec)
 
     mock_container.stop.assert_called_once()
-    mock_container.remove.assert_called_once()
+    mock_container.remove.assert_called_once_with(force=True)
 
 
 def test_provision_generates_name_when_spec_has_none(provisioner, mock_client):
@@ -147,7 +147,7 @@ def test_provision_generates_name_when_spec_has_none(provisioner, mock_client):
     random suffix."""
     provisioner.provision(ContainerSpec(image="test:image"))
 
-    name = mock_client.containers.run.call_args.kwargs["name"]
+    name = mock_client.containers.create.call_args.kwargs["name"]
     assert re.fullmatch(r"agent-container-sandbox-[0-9a-f]{12}", name)
 
 
@@ -160,7 +160,7 @@ def test_provision_generated_names_are_unique(provisioner, mock_client):
     provisioner.provision(nameless)
     provisioner.provision(nameless)
 
-    names = [c.kwargs["name"] for c in mock_client.containers.run.call_args_list]
+    names = [c.kwargs["name"] for c in mock_client.containers.create.call_args_list]
     assert len(names) == 2
     assert names[0] != names[1]
 
@@ -172,7 +172,7 @@ def test_provision_generated_name_is_valid_for_images_with_registry_path(provisi
 
     provisioner.provision(ContainerSpec(image=image))
 
-    name = mock_client.containers.run.call_args.kwargs["name"]
+    name = mock_client.containers.create.call_args.kwargs["name"]
     assert re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_.-]*", name)
 
 
@@ -180,15 +180,62 @@ def test_provision_uses_explicit_name_verbatim(provisioner, mock_client, spec):
     """A caller-supplied name is passed through untouched."""
     provisioner.provision(spec)
 
-    assert mock_client.containers.run.call_args.kwargs["name"] == "test-container"
+    assert mock_client.containers.create.call_args.kwargs["name"] == "test-container"
 
 
 def test_provision_applies_marker_label_when_name_is_generated(provisioner, mock_client):
     """Orphans with generated names stay findable through the marker label."""
     provisioner.provision(ContainerSpec(image="test:image"))
 
-    labels = mock_client.containers.run.call_args.kwargs["labels"]
+    labels = mock_client.containers.create.call_args.kwargs["labels"]
     assert labels["created-by"] == "agent-container-sandbox"
+
+
+def test_provision_deletes_container_when_start_fails(provisioner, mock_container, spec):
+    mock_container.start.side_effect = docker.errors.APIError("start failed")
+
+    with pytest.raises(docker.errors.APIError):
+        provisioner.provision(spec)
+
+    mock_container.exec_run.assert_not_called()
+    mock_container.stop.assert_called_once()
+    mock_container.remove.assert_called_once_with(force=True)
+
+
+def test_provision_does_not_delete_anything_when_create_fails(
+    provisioner, mock_client, mock_container, spec
+):
+    mock_client.containers.create.side_effect = docker.errors.APIError("409 name conflict")
+    provisioner.delete = MagicMock()
+
+    with pytest.raises(docker.errors.APIError):
+        provisioner.provision(spec)
+
+    provisioner.delete.assert_not_called()
+    mock_container.stop.assert_not_called()
+    mock_container.remove.assert_not_called()
+
+
+def test_provision_starts_container_once_before_exec(provisioner, mock_container, spec):
+    result = provisioner.provision(spec)
+
+    assert result is mock_container
+    mock_container.start.assert_called_once_with()
+    names = [c[0] for c in mock_container.mock_calls]
+    assert names.index("start") < names.index("exec_run")
+
+
+def test_provision_logs_warning_and_reraises_original_when_cleanup_fails(
+    provisioner, mock_container, spec, caplog
+):
+    mock_container.start.side_effect = docker.errors.APIError("start failed")
+    mock_container.stop.side_effect = RuntimeError("daemon unreachable")
+
+    with caplog.at_level(logging.WARNING):
+        with pytest.raises(docker.errors.APIError, match="start failed"):
+            provisioner.provision(spec)
+
+    assert "Cleanup of abc123 failed" in caplog.text
 
 
 # === find() ====================================================================
@@ -286,14 +333,14 @@ def test_delete_propagates_unexpected_errors(provisioner, mock_container):
 # === provision(): sandbox_dir ===================================================
 
 
-def test_provision_uses_sandbox_dir_for_run_and_mkdir(provisioner, mock_client, mock_container):
+def test_provision_uses_sandbox_dir_for_mkdir(provisioner, mock_client, mock_container):
     """The spec's sandbox_dir becomes the container's working directory and
     is the directory that gets created."""
     custom = ContainerSpec(image="test:image", name="n", working_dir="/my dir")
 
     provisioner.provision(custom)
 
-    assert mock_client.containers.run.call_args.kwargs["working_dir"] == "/my dir"
+    assert mock_client.containers.create.call_args.kwargs["working_dir"] == "/my dir"
     mkdir_cmd = mock_container.exec_run.call_args.kwargs["cmd"]
     assert mkdir_cmd == ["sh", "-c", "mkdir -p '/my dir'"]
 
@@ -305,7 +352,7 @@ def test_provision_applies_hardening_defaults(provisioner, mock_client, spec):
     """A bare spec yields a hardened container."""
     provisioner.provision(spec)
 
-    kw = mock_client.containers.run.call_args.kwargs
+    kw = mock_client.containers.create.call_args.kwargs
     assert kw["mem_limit"] == "2g"
     assert kw["memswap_limit"] == "2g"
     assert kw["nano_cpus"] == 2_000_000_000
@@ -334,7 +381,7 @@ def test_provision_omits_hardening_when_disabled(provisioner, mock_client):
 
     provisioner.provision(relaxed)
 
-    kw = mock_client.containers.run.call_args.kwargs
+    kw = mock_client.containers.create.call_args.kwargs
     for key in (
         "mem_limit",
         "memswap_limit",
@@ -347,6 +394,7 @@ def test_provision_omits_hardening_when_disabled(provisioner, mock_client):
     # Not omitted like the others: an explicit "unlimited" overrides the daemon default.
     assert kw["pids_limit"] == -1
 
+
 def test_provision_passes_cap_add_after_dropping_all(provisioner, mock_client):
     """Capabilities can be added back selectively."""
     spec_with_caps = ContainerSpec(
@@ -357,7 +405,7 @@ def test_provision_passes_cap_add_after_dropping_all(provisioner, mock_client):
 
     provisioner.provision(spec_with_caps)
 
-    kw = mock_client.containers.run.call_args.kwargs
+    kw = mock_client.containers.create.call_args.kwargs
     assert kw["cap_drop"] == ["ALL"]
     assert kw["cap_add"] == ["CHOWN", "DAC_OVERRIDE"]
 
@@ -367,4 +415,4 @@ def test_provision_converts_cpus_to_nano_cpus(provisioner, mock_client):
 
     provisioner.provision(spec_half_cpu)
 
-    assert mock_client.containers.run.call_args.kwargs["nano_cpus"] == 500_000_000
+    assert mock_client.containers.create.call_args.kwargs["nano_cpus"] == 500_000_000
