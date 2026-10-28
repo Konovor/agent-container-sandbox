@@ -172,8 +172,7 @@ class ContainerSandbox(BaseSandbox):
                 result_holder.update(
                     exit_code=1,
                     output=(
-                        f"{_SANDBOX_ERROR_PREFIX} Error executing command: "
-                        f"{type(e).__name__}: {e}"
+                        f"{_SANDBOX_ERROR_PREFIX} Error executing command: {type(e).__name__}: {e}"
                     ),
                     truncated=False,
                 )

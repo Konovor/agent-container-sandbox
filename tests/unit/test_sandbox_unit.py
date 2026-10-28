@@ -275,12 +275,8 @@ def test_upload_aborts_when_mkdir_fails(sandbox, mock_container):
     mock_container.put_archive.assert_not_called()
 
 
-def test_upload_onto_existing_directory_reports_error_and_does_not_write(
-    sandbox, mock_container
-):
-    mock_container.exec_run.side_effect = _fake_exec_run(
-        directories=["/workspace/adir"]
-    )
+def test_upload_onto_existing_directory_reports_error_and_does_not_write(sandbox, mock_container):
+    mock_container.exec_run.side_effect = _fake_exec_run(directories=["/workspace/adir"])
 
     [response] = sandbox.upload_files([("adir", b"data")])
 
@@ -301,12 +297,8 @@ def test_upload_onto_non_directory_checks_and_writes(sandbox, mock_container):
     assert response.error is None
 
 
-def test_upload_batch_directory_target_does_not_stop_other_files(
-    sandbox, mock_container
-):
-    mock_container.exec_run.side_effect = _fake_exec_run(
-        directories=["/workspace/adir"]
-    )
+def test_upload_batch_directory_target_does_not_stop_other_files(sandbox, mock_container):
+    mock_container.exec_run.side_effect = _fake_exec_run(directories=["/workspace/adir"])
 
     first, second = sandbox.upload_files([("adir", b"a"), ("ok.txt", b"b")])
 

@@ -94,9 +94,7 @@ def provisioner(client: docker.DockerClient) -> ContainerProvisioner:
 
 
 @pytest.fixture(scope="session", autouse=True)
-def _sweep_leaked_containers(
-    client: docker.DockerClient, name_prefix: str
-) -> Iterator[None]:
+def _sweep_leaked_containers(client: docker.DockerClient, name_prefix: str) -> Iterator[None]:
     """Last line of defense: remove containers of THIS run that tests leaked.
 
     Matches on the marker label AND this run's name prefix. The label alone
