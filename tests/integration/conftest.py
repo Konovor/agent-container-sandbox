@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 import logging
 import os
 import uuid
@@ -196,3 +197,21 @@ def make_sandbox(
         return ContainerSandbox(make_container(**(spec or {})), **sandbox_kwargs)
 
     return _make
+
+
+@pytest.fixture(scope="session")
+def image_without_timeout(client: docker.DockerClient, image: str) -> Iterator[str]:
+    """The test image with the `timeout` binary removed (built once per run).
+
+    Yields the image ID, not a tag, so that it works the same on Docker and
+    on Podman (which prefixes local tags with "localhost/").
+    """
+    dockerfile = f"""FROM {image}
+RUN rm -f "$(command -v timeout)" && ! command -v timeout
+"""
+    built, _ = client.images.build(fileobj=io.BytesIO(dockerfile.encode()), rm=True)
+    yield built.id
+    try:
+        client.images.remove(built.id, force=True)
+    except Exception:
+        logger.warning("Could not remove the test image %s", built.id, exc_info=True)
