@@ -33,12 +33,16 @@ _SANDBOX_ERROR_PREFIX = "Sandbox error:"
 
 
 def _decode_and_truncate(raw: bytes, limit: int) -> tuple[str, bool]:
-    """Decode command output, cutting it at ``limit`` raw bytes."""
+    """Decode command output, cutting it at ``limit`` raw bytes.
+
+    No note is appended: deepagents' helpers parse the output and only forgive a
+    torn final line when ``truncated`` is set, and its execute tool adds its own
+    notice from that flag.
+    """
     if len(raw) <= limit:
         return raw.decode("utf-8", errors="replace"), False
     decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
-    text = decoder.decode(raw[:limit], final=False)  # holds back a split trailing character
-    return f"{text}\n\n... Output truncated at {limit} bytes.", True
+    return decoder.decode(raw[:limit], final=False), True  # holds back a split trailing character
 
 
 def _resolve_path(path: str, working_dir: str) -> str:

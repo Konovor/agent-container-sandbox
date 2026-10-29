@@ -169,7 +169,6 @@ def test_non_positive_timeout_is_rejected(sandbox, bad_timeout):
 # (which would show up as a U+FFFD replacement character).
 
 _LIMIT = 100
-_TRUNCATION_MARKER = f"Output truncated at {_LIMIT} bytes."
 
 
 def _a(n: int) -> str:
@@ -191,16 +190,14 @@ def test_output_over_the_limit_is_truncated(small_sandbox):
     result = small_sandbox.execute(_a(200))
 
     assert result.truncated is True
-    assert result.output.startswith("a" * _LIMIT + "\n\n")
-    assert _TRUNCATION_MARKER in result.output
-    assert "a" * (_LIMIT + 1) not in result.output
+    assert result.output == "a" * _LIMIT
 
 
 def test_output_one_byte_over_the_limit_is_truncated(small_sandbox):
     result = small_sandbox.execute(_a(_LIMIT + 1))
 
     assert result.truncated is True
-    assert _TRUNCATION_MARKER in result.output
+    assert result.output == "a" * _LIMIT
 
 
 def test_output_exactly_at_the_limit_is_not_truncated(small_sandbox):
@@ -222,10 +219,7 @@ def test_multibyte_character_split_by_the_limit_is_dropped_whole(small_sandbox, 
     result = small_sandbox.execute(f"{_a(padding)}; {_EMOJI_PRINTF}")
 
     assert result.truncated is True
-    assert "\ufffd" not in result.output
-    assert _EMOJI not in result.output
-    assert result.output.startswith("a" * padding + "\n\n")
-    assert _TRUNCATION_MARKER in result.output
+    assert result.output == "a" * padding  # the split emoji is dropped whole
 
 
 def test_invalid_utf8_is_replaced_not_raised(sandbox):
