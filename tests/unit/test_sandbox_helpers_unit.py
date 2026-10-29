@@ -76,13 +76,12 @@ def test_decode_and_truncate_under_limit_not_truncated():
 
 
 def test_decode_and_truncate_over_limit_is_truncated():
-    """Output beyond the byte limit is cut and flagged."""
+    """Output beyond the byte limit is cut and flagged, with nothing appended:
+    deepagents' parsers only tolerate a torn final line, so added text breaks them."""
     output, truncated = _decode_and_truncate(b"x" * 100, limit=10)
 
     assert truncated is True
-    assert output.startswith("x" * 10)
-    assert "x" * 11 not in output  # nothing beyond the limit survived
-    assert "truncated at 10 bytes" in output
+    assert output == "x" * 10
 
 
 def test_decode_and_truncate_exactly_at_limit_not_truncated():
@@ -102,9 +101,7 @@ def test_decode_and_truncate_splits_multibyte_character_cleanly():
     output, truncated = _decode_and_truncate(raw, limit=limit)
 
     assert truncated is True
-    assert "\ufffd" not in output.split("\n\n")[0]  # no replacement char in the kept text
-    assert output.startswith("é" * 7)
-    assert "truncated at 15 bytes" in output
+    assert output == "é" * 7  # the split 8th "é" is dropped whole: no replacement character
 
 
 # -- _extract_single_file -----------------------------------------------------
