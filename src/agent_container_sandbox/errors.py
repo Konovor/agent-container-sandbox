@@ -45,7 +45,9 @@ class MissingTimeoutError(SandboxError):
 
 
 class MissingPythonError(SandboxError):
-    """Raised when a container cannot run Python commands.
+    """Raised when a container has no usable ``python3``.
 
-    ``ContainerSandbox`` expects a ``python`` installation to be available in the image.
+    The file helpers inherited from ``BaseSandbox`` (``read``, ``write``,
+    ``edit``, ``ls``, ``grep``, ``glob``) run Python inside the container.
+    ``execute`` and the file transfer methods do not need it.
     """
