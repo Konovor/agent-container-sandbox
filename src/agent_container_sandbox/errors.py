@@ -8,7 +8,9 @@ Hierarchy::
 
     SandboxError
     ├── DockerImageNotFound
-    └── MissingTimeoutError
+    ├── MissingTimeoutError
+    └── MissingPythonError
+
 """
 
 from __future__ import annotations
@@ -39,4 +41,13 @@ class MissingTimeoutError(SandboxError):
 
     ``ContainerSandbox`` wraps every command in ``timeout``, so the image
     must ship a ``timeout`` binary (GNU coreutils or compatible).
+    """
+
+
+class MissingPythonError(SandboxError):
+    """Raised when a container has no usable ``python3``.
+
+    The file helpers inherited from ``BaseSandbox`` (``read``, ``write``,
+    ``edit``, ``ls``, ``grep``, ``glob``) run Python inside the container.
+    ``execute`` and the file transfer methods do not need it.
     """

@@ -18,7 +18,7 @@ from deepagents.backends.protocol import (
 from deepagents.backends.sandbox import BaseSandbox
 from docker.models.containers import Container
 
-from .errors import MissingTimeoutError
+from .errors import MissingPythonError, MissingTimeoutError
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +28,7 @@ _KILL_DELAY = 2  # seconds to wait after sending SIGTERM before sending SIGKILL
 _GO_MODE_DIR = 1 << 31  # os.ModeDir: Docker's path stat uses Go's FileMode, not POSIX bits
 _TIMEOUT_GRACE_SECONDS = 5  # headroom for the container-side kill to land before we give up waiting
 _TIMEOUT_PROBE = "timeout -k 1 1 true"  # must match the form execute() uses
+_PYTHON_PROBE = "python3 -c pass"
 _POSIX_TIMEOUT_EXIT_CODE = 124
 _SANDBOX_ERROR_PREFIX = "Sandbox error:"
 
@@ -288,6 +289,20 @@ class ContainerSandbox(BaseSandbox):
                 f"Container image cannot run `{_TIMEOUT_PROBE}` (exit {exit_code}): "
                 f"{detail}. ContainerSandbox requires a `timeout` binary "
                 f"(GNU coreutils or compatible)."
+            )
+
+    def verify_python(self) -> None:
+        """Raise if the container has no usable ``python3``."""
+        exit_code, output_bytes = self._container.exec_run(
+            cmd=["sh", "-c", _PYTHON_PROBE], workdir="/"
+        )
+        if exit_code != 0:
+            detail = (output_bytes or b"").decode("utf-8", errors="replace").strip()
+            raise MissingPythonError(
+                f"Container cannot run `{_PYTHON_PROBE}` (exit {exit_code}): {detail}. "
+                "The file helpers inherited from BaseSandbox (read, write, edit, ls, grep, glob) "
+                "need `python3`. If you only use execute and file transfer, you can skip this "
+                "check (e.g., verify_python=False in ManagedContainerSandbox)."
             )
 
     def _discover_working_dir(self) -> str:

@@ -19,7 +19,7 @@ uv add git+https://github.com/Konovor/agent-container-sandbox
 
 - Docker installed and running.
 - An image that provides `sh`, `sleep`, and `timeout` (GNU coreutils). Very minimal images (for example `scratch`-based ones) will not work.
-- `python3` in the image, if you use the file helpers inherited from `BaseSandbox` (`read`, `write`, `edit`, `ls`, `grep`, `glob`). They run Python inside the container, and without it `ls` and `grep` return empty results instead of an error. `execute`, `upload_files` and `download_files` do not need it.
+- `python3` in the image, if you use the file helpers inherited from `BaseSandbox` (`read`, `write`, `edit`, `ls`, `grep`, `glob`). They run Python inside the container, and without it `ls` and `grep` return empty results instead of an error. `execute`, `upload_files` and `download_files` do not need it. `ManagedContainerSandbox` checks for `python3` by default and fails early if it is missing.
 
 The recommended image meets all of this:
 
@@ -164,8 +164,9 @@ with ManagedContainerSandbox(client, spec) as sandbox:
 | `command_timeout` | `int` | `150` | Passed to `ContainerSandbox`. Must be positive. |
 | `max_output_size` | `int` | `65536` | Passed to `ContainerSandbox`. Must be positive. |
 | `verify_timeout` | `bool` | `True` | Run `verify_timeout()` on entry, so an image without a usable `timeout` binary fails early. |
+| `verify_python` | `bool` | `True` | Run `verify_python()` on entry, so an image without `python3` fails early. Set it to `False` if you only use `execute` and file transfer. |
 
-- **Cleanup is guaranteed.** The container is deleted on exit, including when the body raises. If setup fails after the container was created (for example `MissingTimeoutError`), it is deleted before the exception propagates.
+- **Cleanup is guaranteed.** The container is deleted on exit, including when the body raises. If setup fails after the container was created (for example `MissingTimeoutError` or `MissingPythonError`), it is deleted before the exception propagates.
 - **Errors are never masked.** If deletion itself fails, a warning is logged and your original exception still propagates. The container then stops on its own after `max_lifetime_seconds`.
 - **Single-use.** Entering the same instance twice raises `RuntimeError`. Create a new instance.
 - **Fixed names can collide.** With an explicit `spec.name`, entering while a container of that name still exists fails with a docker-py error. Omit the name unless you need it.
@@ -235,9 +236,14 @@ Every `execute()` call needs `timeout` inside the container. `ContainerProvision
 ```python
 sandbox = ContainerSandbox(container)
 sandbox.verify_timeout()  # raises MissingTimeoutError if `timeout` is unusable
+sandbox.verify_python()  # raises MissingPythonError if `python3` is unusable
 ```
 
-Without the check, every `execute()` call fails with exit code `127` and an "executable file not found in $PATH" message from the container runtime in `output`. `execute()` does not raise, so an agent would see this on every command and may misread it as a problem with its own code. `verify_timeout()` turns it into a single `MissingTimeoutError` at setup time. `ManagedContainerSandbox` runs this check for you by default. `verify_timeout()` checks only for `timeout`, not for `python3`.
+Without the `timeout` check, every `execute()` call fails with exit code `127` and an "executable file not found in $PATH" message from the container runtime in `output`. `execute()` does not raise, so an agent would see this on every command and may misread it as a problem with its own code. `verify_timeout()` turns it into a single `MissingTimeoutError` at setup time.
+
+`verify_python()` matters for the file helpers (`read`, `write`, `edit`, `ls`, `grep`, `glob`), which run Python inside the container. Without it, `ls` and `grep` return empty results instead of an error, so an agent can conclude that a directory is empty. `execute()` and file transfer do not need Python, so `verify_python()` is a separate, optional call.
+
+`ManagedContainerSandbox` runs both checks on entry by default, `timeout` first. Turn either off with `verify_timeout=False` or `verify_python=False`.
 
 ## Errors
 
@@ -246,7 +252,8 @@ Everything the library raises on purpose inherits from `SandboxError`:
 ```
 SandboxError
 ├── DockerImageNotFound   image missing and could not be pulled (including auth or rate-limit failures); has an .image attribute
-└── MissingTimeoutError   the container cannot run commands under `timeout`
+├── MissingTimeoutError   the container cannot run commands under `timeout`
+└── MissingPythonError    the container has no usable `python3`
 ```
 
 ```python

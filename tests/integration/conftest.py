@@ -197,19 +197,39 @@ def make_sandbox(
     return _make
 
 
-@pytest.fixture(scope="session")
-def image_without_timeout(client: docker.DockerClient, image: str) -> Iterator[str]:
-    """The test image with the `timeout` binary removed (built once per run).
+def _build_image_without(client: docker.DockerClient, base_image: str, binary: str) -> str:
+    """Build `base_image` with `binary` removed and return the image ID.
 
-    Yields the image ID, not a tag, so that it works the same on Docker and
-    on Podman (which prefixes local tags with "localhost/").
+    The trailing `! command -v` fails the build if another copy is still on the
+    PATH, so a fixture can never silently produce an image that has the binary.
+    Returns the ID, not a tag, so it works the same on Docker and on Podman
+    (which prefixes local tags with "localhost/").
     """
-    dockerfile = f"""FROM {image}
-RUN rm -f "$(command -v timeout)" && ! command -v timeout
+    dockerfile = f"""FROM {base_image}
+RUN rm -f "$(command -v {binary})" && ! command -v {binary}
 """
     built, _ = client.images.build(fileobj=io.BytesIO(dockerfile.encode()), rm=True)
-    yield built.id
+    return built.id
+
+
+def _remove_image(client: docker.DockerClient, image_id: str) -> None:
     try:
-        client.images.remove(built.id, force=True)
+        client.images.remove(image_id, force=True)
     except Exception:
-        logger.warning("Could not remove the test image %s", built.id, exc_info=True)
+        logger.warning("Could not remove the test image %s", image_id, exc_info=True)
+
+
+@pytest.fixture(scope="session")
+def image_without_timeout(client: docker.DockerClient, image: str) -> Iterator[str]:
+    """The test image with the `timeout` binary removed (built once per run)."""
+    image_id = _build_image_without(client, image, "timeout")
+    yield image_id
+    _remove_image(client, image_id)
+
+
+@pytest.fixture(scope="session")
+def image_without_python(client: docker.DockerClient, image: str) -> Iterator[str]:
+    """The test image with `python3` removed (built once per run)."""
+    image_id = _build_image_without(client, image, "python3")
+    yield image_id
+    _remove_image(client, image_id)

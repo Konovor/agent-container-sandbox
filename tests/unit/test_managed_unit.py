@@ -14,10 +14,14 @@ from unittest.mock import MagicMock
 import docker
 import pytest
 
-from agent_container_sandbox import ContainerSandbox, ContainerSpec
-from agent_container_sandbox.errors import MissingTimeoutError
+from agent_container_sandbox import (
+    ContainerSandbox,
+    ContainerSpec,
+    MissingPythonError,
+    MissingTimeoutError,
+)
 from agent_container_sandbox.managed import ManagedContainerSandbox
-from agent_container_sandbox.sandbox import _KILL_DELAY, _TIMEOUT_PROBE
+from agent_container_sandbox.sandbox import _KILL_DELAY, _PYTHON_PROBE, _TIMEOUT_PROBE
 
 MANAGED_LOGGER = "agent_container_sandbox.managed"
 
@@ -27,7 +31,7 @@ MANAGED_LOGGER = "agent_container_sandbox.managed"
 @pytest.fixture
 def mock_container():
     """A fake container. The first exec_run call is provision()'s mkdir; any
-    later call is the verify_timeout() probe or a sandbox command."""
+    later call is a verify probe (timeout, then python3) or a sandbox command."""
     container = MagicMock()
     container.short_id = "abc123"
     container.status = "running"
@@ -54,6 +58,30 @@ def spec():
 @pytest.fixture
 def managed(mock_client, spec):
     return ManagedContainerSandbox(mock_client, spec)
+
+
+# -- Helpers ------------------------------------------------------------------
+
+
+def _probes(mock_container):
+    """The probe commands that ran inside the container, in order."""
+    commands = [c.kwargs["cmd"][-1] for c in mock_container.exec_run.call_args_list]
+    return [c for c in commands if c in (_TIMEOUT_PROBE, _PYTHON_PROBE)]
+
+
+def _fail_probe(mock_container, probe, exit_code, output):
+    """Make exec_run fail for one probe command and succeed for everything else.
+
+    Keyed by command instead of by call position, so adding or reordering
+    probes does not silently break the tests that use it.
+    """
+
+    def exec_run(**kwargs):
+        if kwargs["cmd"][-1] == probe:
+            return (exit_code, output)
+        return (0, b"")
+
+    mock_container.exec_run.side_effect = exec_run
 
 
 # === Construction ==============================================================
@@ -138,6 +166,7 @@ def test_sandbox_settings_are_passed_through(mock_client, mock_container, spec):
         command_timeout=42,
         max_output_size=10,
         verify_timeout=False,
+        verify_python=False,
     )
 
     with managed as sandbox:
@@ -157,45 +186,41 @@ def test_sandbox_settings_are_passed_through(mock_client, mock_container, spec):
     assert result.truncated is True
 
 
-# -- verify_timeout ------------------------------------------------------------
+# -- verify_timeout / verify_python --------------------------------------------
 
 
-def test_enter_verifies_timeout_by_default(managed, mock_container):
-    """By default the timeout probe runs once after provisioning."""
+@pytest.mark.parametrize(
+    ("kwargs", "expected"),
+    [
+        ({}, [_TIMEOUT_PROBE, _PYTHON_PROBE]),  # both by default, timeout first
+        ({"verify_timeout": False}, [_PYTHON_PROBE]),
+        ({"verify_python": False}, [_TIMEOUT_PROBE]),
+        ({"verify_timeout": False, "verify_python": False}, []),
+    ],
+)
+def test_enter_runs_only_the_enabled_checks_in_order(
+    mock_client, mock_container, spec, kwargs, expected
+):
+    with ManagedContainerSandbox(mock_client, spec, **kwargs):
+        pass
+
+    assert _probes(mock_container) == expected
+
+
+def test_probes_run_after_provision_and_use_raw_sh(managed, mock_container):
+    """The probes follow provision()'s mkdir and are not wrapped in `timeout`."""
     with managed:
         pass
 
-    assert mock_container.exec_run.call_count == 2  # mkdir, then the probe
-    probe_cmd = mock_container.exec_run.call_args.kwargs["cmd"]
-    assert probe_cmd == ["sh", "-c", _TIMEOUT_PROBE]
-
-
-def test_enter_skips_verification_when_disabled(mock_client, mock_container, spec):
-    """verify_timeout=False means only provision()'s own mkdir runs."""
-    managed = ManagedContainerSandbox(mock_client, spec, verify_timeout=False)
-
-    with managed:
-        pass
-
-    assert mock_container.exec_run.call_count == 1  # mkdir only
+    calls = [c.kwargs["cmd"] for c in mock_container.exec_run.call_args_list]
+    assert calls == [
+        ["sh", "-c", "mkdir -p /workspace"],
+        ["sh", "-c", _TIMEOUT_PROBE],
+        ["sh", "-c", _PYTHON_PROBE],
+    ]
 
 
 # -- Failures during __enter__ -------------------------------------------------
-
-
-def test_enter_deletes_container_when_verification_fails(managed, mock_container):
-    """If the probe fails after the container exists, it is deleted before
-    the error propagates, because __exit__ never runs."""
-    mock_container.exec_run.side_effect = [
-        (0, b""),  # provision's mkdir
-        (127, b"timeout: not found"),  # verify_timeout probe
-    ]
-
-    with pytest.raises(MissingTimeoutError):
-        managed.__enter__()
-
-    mock_container.stop.assert_called_once()
-    mock_container.remove.assert_called_once()
 
 
 def test_enter_deletes_container_when_sandbox_construction_fails(
@@ -251,6 +276,34 @@ def test_enter_does_not_double_delete_when_provision_cleans_up_itself(managed, m
 
     mock_container.stop.assert_called_once()
     mock_container.remove.assert_called_once()
+
+
+@pytest.mark.parametrize(
+    ("probe", "error", "output"),
+    [
+        pytest.param(_TIMEOUT_PROBE, MissingTimeoutError, b"timeout: not found", id="timeout"),
+        pytest.param(_PYTHON_PROBE, MissingPythonError, b"python3: not found", id="python"),
+    ],
+)
+def test_enter_deletes_container_when_a_check_fails(managed, mock_container, probe, error, output):
+    """If a probe fails after the container exists, it is deleted before the
+    error propagates, because __exit__ never runs."""
+    _fail_probe(mock_container, probe, 127, output)
+
+    with pytest.raises(error):
+        managed.__enter__()
+
+    mock_container.stop.assert_called_once()
+    mock_container.remove.assert_called_once()
+
+
+def test_enter_does_not_probe_python_when_the_timeout_check_fails(managed, mock_container):
+    _fail_probe(mock_container, _TIMEOUT_PROBE, 127, b"timeout: not found")
+
+    with pytest.raises(MissingTimeoutError):
+        managed.__enter__()
+
+    assert _probes(mock_container) == [_TIMEOUT_PROBE]
 
 
 # === __exit__ ==================================================================
@@ -355,7 +408,7 @@ def test_client_is_never_closed_when_body_raises(managed, mock_client):
 
 
 def test_client_is_never_closed_when_enter_fails(managed, mock_client, mock_container):
-    mock_container.exec_run.side_effect = [(0, b""), (127, b"timeout: not found")]
+    _fail_probe(mock_container, _TIMEOUT_PROBE, 127, b"timeout: not found")
 
     with pytest.raises(MissingTimeoutError):
         managed.__enter__()
@@ -397,7 +450,7 @@ def test_reentry_after_exit_raises(managed, mock_client):
 def test_instance_is_burned_even_when_first_enter_fails(managed, mock_container):
     """A failed first __enter__ still counts as use, so the instance cannot
     be retried."""
-    mock_container.exec_run.side_effect = [(0, b""), (127, b"timeout: not found")]
+    _fail_probe(mock_container, _TIMEOUT_PROBE, 127, b"timeout: not found")
 
     with pytest.raises(MissingTimeoutError):
         managed.__enter__()
