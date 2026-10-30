@@ -10,7 +10,12 @@ from __future__ import annotations
 import docker
 import pytest
 
-from agent_container_sandbox import ManagedContainerSandbox, MissingTimeoutError
+from agent_container_sandbox import (
+    ContainerSandbox,
+    ManagedContainerSandbox,
+    MissingPythonError,
+    MissingTimeoutError,
+)
 
 
 def _exists(client, name: str) -> bool:
@@ -104,6 +109,45 @@ def test_without_the_check_a_missing_timeout_shows_up_on_every_command(
     assert result.exit_code != 0
     assert "timeout" in result.output
     assert not _exists(client, spec.name)
+
+
+def test_missing_python_aborts_entry_and_leaves_no_container(
+    client, make_spec, image_without_python
+):
+    spec = make_spec(image=image_without_python)
+
+    with pytest.raises(MissingPythonError, match="python3"):
+        with ManagedContainerSandbox(client, spec):
+            pytest.fail("the body must not run")
+
+    assert not _exists(client, spec.name)
+
+
+def test_without_the_check_execute_works_and_the_helpers_report_the_missing_python(
+    client, make_spec, image_without_python
+):
+    """Pins the case verify_python=False exists for: execute and file transfer
+    work on an image without Python, while the inherited helpers report it."""
+    spec = make_spec(image=image_without_python)
+
+    with ManagedContainerSandbox(client, spec, verify_python=False) as sandbox:
+        assert sandbox.execute("echo hi").output == "hi\n"
+        result = sandbox.write("/workspace/x.txt", "data")
+
+    assert result.error is not None
+    assert "python3" in result.error
+    assert not _exists(client, spec.name)
+
+
+def test_verify_python_passes_on_the_default_image(sandbox):
+    sandbox.verify_python()  # must not raise
+
+
+def test_verify_python_raises_on_an_image_without_python(make_container, image_without_python):
+    sandbox = ContainerSandbox(make_container(image=image_without_python))
+
+    with pytest.raises(MissingPythonError, match="python3"):
+        sandbox.verify_python()
 
 
 def test_name_collision_fails_and_leaves_the_existing_container_untouched(
