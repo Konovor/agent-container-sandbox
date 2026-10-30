@@ -8,7 +8,9 @@ Hierarchy::
 
     SandboxError
     ├── DockerImageNotFound
-    └── MissingTimeoutError
+    ├── MissingTimeoutError
+    └── MissingPythonError
+
 """
 
 from __future__ import annotations
@@ -39,4 +41,11 @@ class MissingTimeoutError(SandboxError):
 
     ``ContainerSandbox`` wraps every command in ``timeout``, so the image
     must ship a ``timeout`` binary (GNU coreutils or compatible).
+    """
+
+
+class MissingPythonError(SandboxError):
+    """Raised when a container cannot run Python commands.
+
+    ``ContainerSandbox`` expects a ``python`` installation to be available in the image.
     """

@@ -8,8 +8,17 @@ from unittest.mock import MagicMock
 import docker
 import pytest
 
-from agent_container_sandbox import ContainerSandbox
-from agent_container_sandbox.sandbox import _KILL_DELAY, _SANDBOX_ERROR_PREFIX
+from agent_container_sandbox import (
+    ContainerSandbox,
+    MissingPythonError,
+    MissingTimeoutError,
+)
+from agent_container_sandbox.sandbox import (
+    _KILL_DELAY,
+    _PYTHON_PROBE,
+    _SANDBOX_ERROR_PREFIX,
+    _TIMEOUT_PROBE,
+)
 
 GO_DIR_HEADER = {
     "name": "d",
@@ -393,3 +402,68 @@ def test_download_batch_keeps_order_across_outcomes(sandbox, mock_container):
     assert [r.path for r in responses] == ["ok.txt", "d", "missing.txt"]
     assert [r.content for r in responses] == [b"hi", None, None]
     assert [r.error for r in responses] == [None, "is_directory", "file_not_found"]
+
+
+# === Constructor validation ====================================================
+
+
+@pytest.mark.parametrize("bad_value", [0, -1])
+def test_constructor_rejects_non_positive_command_timeout(mock_container, bad_value):
+    mock_container.reload.reset_mock()
+
+    with pytest.raises(ValueError, match="command_timeout"):
+        ContainerSandbox(mock_container, command_timeout=bad_value)
+
+    mock_container.reload.assert_not_called()  # failed before any daemon call
+
+
+@pytest.mark.parametrize("bad_value", [0, -1])
+def test_constructor_rejects_non_positive_max_output_size(mock_container, bad_value):
+    mock_container.reload.reset_mock()
+
+    with pytest.raises(ValueError, match="max_output_size"):
+        ContainerSandbox(mock_container, max_output_size=bad_value)
+
+    mock_container.reload.assert_not_called()
+
+
+# === verify_timeout() / verify_python() ========================================
+
+_VERIFY_CASES = [
+    ("verify_timeout", MissingTimeoutError, _TIMEOUT_PROBE),
+    ("verify_python", MissingPythonError, _PYTHON_PROBE),
+]
+
+
+@pytest.mark.parametrize(("method", "error", "probe"), _VERIFY_CASES)
+def test_verify_passes_when_the_probe_succeeds(sandbox, mock_container, method, error, probe):
+    mock_container.exec_run.return_value = (0, b"")
+
+    getattr(sandbox, method)()  # must not raise
+
+    kwargs = mock_container.exec_run.call_args.kwargs
+    # A raw `sh -c <probe>`: no `timeout` wrapper, so a missing `timeout` binary can
+    # never be mistaken for a missing python3. workdir "/" keeps it independent of working_dir.
+    assert kwargs["cmd"] == ["sh", "-c", probe]
+    assert kwargs["workdir"] == "/"
+
+
+@pytest.mark.parametrize(("method", "error", "probe"), _VERIFY_CASES)
+def test_verify_raises_with_exit_code_and_runtime_message(
+    sandbox, mock_container, method, error, probe
+):
+    mock_container.exec_run.return_value = (127, b"executable file not found\n")
+
+    with pytest.raises(error, match="executable file not found") as excinfo:
+        getattr(sandbox, method)()
+
+    assert "exit 127" in str(excinfo.value)
+    assert probe in str(excinfo.value)
+
+
+@pytest.mark.parametrize(("method", "error", "probe"), _VERIFY_CASES)
+def test_verify_tolerates_a_failure_without_output(sandbox, mock_container, method, error, probe):
+    mock_container.exec_run.return_value = (1, None)
+
+    with pytest.raises(error):
+        getattr(sandbox, method)()

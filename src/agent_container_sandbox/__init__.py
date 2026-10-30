@@ -2,7 +2,7 @@
 
 from importlib.metadata import PackageNotFoundError, version
 
-from .errors import DockerImageNotFound, MissingTimeoutError, SandboxError
+from .errors import DockerImageNotFound, MissingPythonError, MissingTimeoutError, SandboxError
 from .managed import ManagedContainerSandbox
 from .provisioning import ContainerProvisioner, ContainerSpec
 from .sandbox import ContainerSandbox
@@ -19,6 +19,7 @@ __all__ = [
     "SandboxError",
     "DockerImageNotFound",
     "MissingTimeoutError",
+    "MissingPythonError",
     "ManagedContainerSandbox",
     "__version__",
 ]

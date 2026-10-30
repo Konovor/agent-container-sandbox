@@ -51,6 +51,9 @@ class ManagedContainerSandbox:
         verify_timeout: Run ``ContainerSandbox.verify_timeout()`` on entry so
             an image without a usable ``timeout`` binary fails early with a
             clear error.
+        verify_python: Run ``ContainerSandbox.verify_python()`` on entry so an
+            image without a usable ``python3`` binary fails early with a clear
+            error.
     """
 
     def __init__(
@@ -62,6 +65,7 @@ class ManagedContainerSandbox:
         command_timeout: int = _DEFAULT_COMMAND_TIMEOUT,
         max_output_size: int = _DEFAULT_MAX_OUTPUT_SIZE,
         verify_timeout: bool = True,
+        verify_python: bool = True,
     ) -> None:
         """Store configuration only. No Docker calls happen until ``__enter__``."""
         _validate_limits(command_timeout=command_timeout, max_output_size=max_output_size)
@@ -71,7 +75,7 @@ class ManagedContainerSandbox:
         self._command_timeout = command_timeout
         self._max_output_size = max_output_size
         self._verify_timeout = verify_timeout
-
+        self._verify_python = verify_python
         self._provisioner: ContainerProvisioner | None = None
         self._container: Container | None = None  # private; never exposed
         self._used = False  # set on first __enter__; never reset
@@ -83,6 +87,8 @@ class ManagedContainerSandbox:
             RuntimeError: This instance was already entered (single-use).
             MissingTimeoutError: ``verify_timeout`` is enabled and the image
                 cannot run commands under ``timeout``.
+            MissingPythonError: ``verify_python`` is enabled and the image
+                cannot run Python commands.
 
         If anything fails after the container has been created, the container
         is deleted before the exception propagates, because ``__exit__`` does
@@ -109,6 +115,8 @@ class ManagedContainerSandbox:
             )
             if self._verify_timeout:
                 sandbox.verify_timeout()
+            if self._verify_python:
+                sandbox.verify_python()
         except BaseException:
             # __exit__ will not run, so delete the container here.
             self._cleanup()

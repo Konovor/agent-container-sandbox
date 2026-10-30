@@ -13,6 +13,7 @@ EXPECTED_EXPORTS = {
     "SandboxError",
     "DockerImageNotFound",
     "MissingTimeoutError",
+    "MissingPythonError",
     "ManagedContainerSandbox",
     "__version__",
 }
