@@ -300,7 +300,7 @@ class ContainerSandbox(BaseSandbox):
             detail = (output_bytes or b"").decode("utf-8", errors="replace").strip()
             raise MissingPythonError(
                 f"Container cannot run `{_PYTHON_PROBE}` (exit {exit_code}): {detail}. "
-                "The file helpers inherited from BaseSandbox (read, write, edit, ls, grep, glob) "
+                "The file helpers inherited from BaseSandbox (read, write, edit, ls, glob) "
                 "need `python3`. If you only use execute and file transfer, you can skip this "
                 "check (e.g., verify_python=False in ManagedContainerSandbox)."
             )
