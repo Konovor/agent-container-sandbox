@@ -356,6 +356,7 @@ def test_provision_applies_hardening_defaults(provisioner, mock_client, spec):
     assert kw["mem_limit"] == "2g"
     assert kw["memswap_limit"] == "2g"
     assert kw["nano_cpus"] == 2_000_000_000
+    assert kw["network_mode"] == "none"
     assert kw["pids_limit"] == 512
     assert kw["security_opt"] == ["no-new-privileges:true"]
     assert kw["cap_drop"] == ["ALL"]
@@ -374,6 +375,7 @@ def test_provision_omits_hardening_when_disabled(provisioner, mock_client):
         name="test-container",
         mem_limit=None,
         cpus=None,
+        network_mode=None,
         pids_limit=None,
         no_new_privileges=False,
         cap_drop_all=False,
@@ -386,6 +388,7 @@ def test_provision_omits_hardening_when_disabled(provisioner, mock_client):
         "mem_limit",
         "memswap_limit",
         "nano_cpus",
+        "network_mode",
         "security_opt",
         "cap_drop",
         "cap_add",
@@ -416,3 +419,14 @@ def test_provision_converts_cpus_to_nano_cpus(provisioner, mock_client):
     provisioner.provision(spec_half_cpu)
 
     assert mock_client.containers.create.call_args.kwargs["nano_cpus"] == 500_000_000
+
+
+def test_provision_passes_custom_network_mode(provisioner, mock_client):
+    """A custom network mode is forwarded verbatim to Docker."""
+    spec_custom_net = ContainerSpec(
+        image="test:image", name="test-container", network_mode="bridge"
+    )
+
+    provisioner.provision(spec_custom_net)
+
+    assert mock_client.containers.create.call_args.kwargs["network_mode"] == "bridge"

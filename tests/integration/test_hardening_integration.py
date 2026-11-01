@@ -31,6 +31,12 @@ def _proc_status(sandbox: ContainerSandbox) -> dict[str, str]:
     return fields
 
 
+def _interfaces(sandbox) -> set[str]:
+    result = sandbox.execute("ls /sys/class/net")
+    assert result.exit_code == 0, result.output
+    return set(result.output.split())
+
+
 # === Defaults are enforced =====================================================
 
 
@@ -94,6 +100,10 @@ def test_container_config_reflects_defaults(make_container):
     assert {"no-new-privileges:true", "no-new-privileges"} & set(security_opt)
 
 
+def test_default_container_has_only_the_loopback_interface(sandbox):
+    assert _interfaces(sandbox) == {"lo"}
+
+
 # === Overrides and opt-outs work ===============================================
 
 
@@ -125,6 +135,12 @@ def test_relaxed_spec_removes_the_restrictions(make_container):
     assert host_config["NanoCpus"] == 0
     # Unlimited is reported as -1 (Podman API), 0, or None, depending on runtime and version.
     assert host_config["PidsLimit"] in (None, 0, -1)
+
+
+def test_bridge_network_mode_adds_a_network_interface(make_sandbox):
+    sandbox = make_sandbox(spec={"network_mode": "bridge"})
+
+    assert _interfaces(sandbox) - {"lo"}
 
 
 # === Lifecycle ==================================================================

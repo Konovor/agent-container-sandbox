@@ -66,6 +66,7 @@ class ContainerSpec:
     labels: dict[str, str] = field(default_factory=dict)
     mem_limit: str | None = "2g"
     cpus: float | None = 2.0
+    network_mode: str | None = "none"
     pids_limit: int | None = 512
     no_new_privileges: bool = True
     cap_drop_all: bool = True
@@ -84,6 +85,8 @@ def _hardening_kwargs(spec: ContainerSpec) -> dict[str, Any]:
         kwargs["memswap_limit"] = spec.mem_limit  # no swap beyond the cap
     if spec.cpus is not None:
         kwargs["nano_cpus"] = int(spec.cpus * 1_000_000_000)
+    if spec.network_mode is not None:
+        kwargs["network_mode"] = spec.network_mode
     # Always sent. Omitting it would let the daemon apply its own default
     # (2048 on Podman), so None would not actually mean "unlimited".
     kwargs["pids_limit"] = spec.pids_limit if spec.pids_limit is not None else -1
