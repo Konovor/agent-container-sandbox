@@ -96,6 +96,8 @@ result = agent.invoke(
 )
 ```
 
+The container has no network by default, so tasks that need `pip install`, `git clone` or web requests require `ContainerSpec(image=IMAGE, network_mode="bridge")`.
+
 For plain LangChain agents, pass the sandbox through `FilesystemMiddleware(backend=sandbox)` from `deepagents.middleware.filesystem`.
 
 With `ManagedContainerSandbox`, keep the agent call inside the `with` block. The container is gone afterwards.
@@ -131,10 +133,13 @@ print(result.exit_code)  # 124
 | `labels` | `dict` | `{}` | Extra labels. The marker label below is always added. |
 | `mem_limit` | `str \| None` | `"2g"` | Memory cap. Swap is capped at the same value. `None` = unlimited. |
 | `cpus` | `float \| None` | `2.0` | CPU cap in cores. `None` = unlimited. |
+| `network_mode` | `str \| None` | `"none"` | Container network mode. `"none"` disables networking. Use `"bridge"` for normal network access. `"host"` shares the host's network stack and removes the isolation. `None` sends nothing, so the daemon's default applies (usually full network access). |
 | `pids_limit` | `int \| None` | `512` | Maximum processes and threads. `None` = unlimited. |
 | `no_new_privileges` | `bool` | `True` | Block privilege gain through setuid binaries. |
 | `cap_drop_all` | `bool` | `True` | Drop all Linux capabilities. |
 | `cap_add` | `tuple[str, ...]` | `()` | Capabilities to add back after dropping, e.g. `("CHOWN", "DAC_OVERRIDE")`. |
+
+All fields are keyword-only: write `ContainerSpec(image=IMAGE)`, not `ContainerSpec(IMAGE)`.
 
 ### `ContainerProvisioner`
 
@@ -184,12 +189,13 @@ Containers are hardened by default, to limit the damage an agent can do to the h
 | `mem_limit` (plus equal swap cap) | `2g` | A runaway allocation exhausting host memory | The process is killed: `Killed`, exit code `137` |
 | `pids_limit` | `512` | Fork bombs exhausting the host's process table | `Cannot fork` errors from the shell |
 | `cpus` | `2.0` | One container starving the rest of the host | Commands run slower, so they reach their timeout sooner |
+| `network_mode` | `none` | Reaching your LAN, cloud metadata endpoints, and the internet | Name-resolution or connection errors, for example `Temporary failure in name resolution` |
 | `no_new_privileges` | on | Privilege escalation through setuid binaries such as `sudo` | `sudo` and similar tools stop working |
 | `cap_drop_all` | on | Kernel attack surface reachable through Linux capabilities | `Permission denied` on some root-only operations |
 
 Mention these limits in your system prompt or tool description, so the model can tell an exceeded limit from a bug in its own code.
 
-**Adjusting the defaults.** Set a field to `None` or `False` to remove a restriction, for example `ContainerSpec(image=IMAGE, mem_limit="8g", pids_limit=None)`. `pids_limit=None` sends an explicit unlimited value, so a daemon-wide default (Podman applies 2048, for example) cannot apply. With all capabilities dropped, root inside the container loses some abilities. The most likely surprise is writing to a mounted host directory owned by another user, which needs `DAC_OVERRIDE`. `apt-get` needs `SETUID`, `SETGID`, and `CHOWN`. Add back only what you need with `cap_add=("CHOWN", "DAC_OVERRIDE")`.
+**Adjusting the defaults.** Set a field to `None` or `False` to remove a restriction, for example `ContainerSpec(image=IMAGE, mem_limit="8g", pids_limit=None)`. `pids_limit=None` sends an explicit unlimited value, so a daemon-wide default (Podman applies 2048, for example) cannot apply. For the network, `network_mode="bridge"` allows access, which reaches your LAN, cloud metadata endpoints, and the internet, and `None` leaves the daemon's default. `"host"` shares the host's network stack and removes the isolation entirely. With all capabilities dropped, root inside the container loses some abilities. The most likely surprise is writing to a mounted host directory owned by another user, which needs `DAC_OVERRIDE`. `apt-get` needs `SETUID`, `SETGID`, and `CHOWN`, plus a `network_mode` that allows network access. Add back only what you need with `cap_add=("CHOWN", "DAC_OVERRIDE")`.
 
 **Verifying the setup.** Confirm that Docker applied the settings:
 
@@ -272,7 +278,7 @@ Other failures, such as a container that cannot start or a daemon that is unreac
 - **`get_or_create` reuses by name only.** It does not check that an existing container's image, volumes, working directory, or hardening settings match the spec, and it does not check that the container is running. A container created earlier without limits is returned as is.
 - **`get_or_create` is not safe against races.** Two callers creating the same name at the same moment can conflict.
 - **`ls` and `grep` do not report clipped output.** When a listing or a search exceeds `max_output_size`, the deepagents helpers return the part that fit without any signal that results are missing, so the answer looks complete (observed with deepagents 0.7.19 and 0.7.32, reported as [deepagents#7480](https://github.com/langchain-ai/deepagents/issues/7480)). `glob` and `execute` do report truncation. Raise `max_output_size` for large directories or trees.
-- **Hardening does not cover the network.** By default the container can reach your LAN, cloud metadata endpoints, and the internet. Restrict it with a dedicated Docker network or firewall rules if the agent should not have that access.
+- **Network access is all or nothing.** The library can switch networking on or off but cannot restrict it to specific hosts. If the agent needs some access but not all of it, attach the container to a dedicated Docker network or use firewall rules.
 - **Mounted directories are exposed.** A read-write volume gives the agent full access to its contents. Mount a dedicated directory, never a home directory, and never the Docker socket. Likewise, if your own code runs in a container, mounting the host socket gives that container control of the host's Docker daemon.
 - **Commands run as the image's default user,** which is usually root inside the container. Capabilities are dropped, but the container is not rootless.
 - **Disk usage is not limited.** The container's writable layer can grow until the host's disk is full.
