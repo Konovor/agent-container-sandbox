@@ -19,7 +19,7 @@ uv add git+https://github.com/Konovor/agent-container-sandbox
 
 - Docker installed and running.
 - An image that provides `sh`, `sleep`, and `timeout` (GNU coreutils). Very minimal images (for example `scratch`-based ones) will not work.
-- `python3` in the image, if you use the file helpers inherited from `BaseSandbox` (`read`, `write`, `edit`, `ls`, `grep`, `glob`). They run Python inside the container, and without it `ls` and `grep` return empty results instead of an error. `execute`, `upload_files` and `download_files` do not need it. `ManagedContainerSandbox` checks for `python3` by default and fails early if it is missing.
+- `python3` in the image, if you use the file helpers inherited from `BaseSandbox` (`read`, `write`, `edit`, `ls`, `glob`). They run Python inside the container. Without it, `read`, `write`, `edit` and `glob` return an error, but `ls` returns an empty list instead of an error. `grep`, `execute`, `upload_files` and `download_files` do not need it (observed with deepagents 0.7.19 and 0.7.32). `ManagedContainerSandbox` checks for `python3` by default and fails early if it is missing.
 
 The recommended image meets all of this:
 
@@ -241,7 +241,7 @@ sandbox.verify_python()  # raises MissingPythonError if `python3` is unusable
 
 Without the `timeout` check, every `execute()` call fails with exit code `127` and an "executable file not found in $PATH" message from the container runtime in `output`. `execute()` does not raise, so an agent would see this on every command and may misread it as a problem with its own code. `verify_timeout()` turns it into a single `MissingTimeoutError` at setup time.
 
-`verify_python()` matters for the file helpers (`read`, `write`, `edit`, `ls`, `grep`, `glob`), which run Python inside the container. Without it, `ls` and `grep` return empty results instead of an error, so an agent can conclude that a directory is empty. `execute()` and file transfer do not need Python, so `verify_python()` is a separate, optional call.
+`verify_python()` matters for the file helpers `read`, `write`, `edit`, `ls` and `glob`, which run Python inside the container. Without it, `ls` returns an empty list instead of an error, so an agent can conclude that a directory is empty. `execute()` and file transfer do not need Python, so `verify_python()` is a separate, optional call.
 
 `ManagedContainerSandbox` runs both checks on entry by default, `timeout` first. Turn either off with `verify_timeout=False` or `verify_python=False`.
 
