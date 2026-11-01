@@ -50,6 +50,15 @@ def spec():
     return ContainerSpec(image="test:image", name="test-container")
 
 
+# === ContainerSpec ============================================================
+
+
+def test_spec_fields_are_keyword_only():
+    """Positional arguments would silently shift when fields are added or reordered."""
+    with pytest.raises(TypeError):
+        ContainerSpec("test:image")  # type: ignore
+
+
 # === provision() ==============================================================
 
 

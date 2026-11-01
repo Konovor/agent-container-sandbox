@@ -32,7 +32,7 @@ _DEFAULT_WORKING_DIR = "/workspace"
 _DEFAULT_MAX_LIFETIME_SECONDS = 3600  # hard upper bound; not an idle timeout
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, kw_only=True)
 class ContainerSpec:
     """Immutable description of a container to provision.
 
