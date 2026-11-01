@@ -59,7 +59,7 @@ def test_spec_fields_are_keyword_only():
         ContainerSpec("test:image")  # type: ignore
 
 
-# === provision() ==============================================================
+# === _check_image() ===========================================================
 
 
 def test_check_image_auto_pull_pulls_when_missing(provisioner, mock_client):
@@ -88,6 +88,9 @@ def test_check_image_does_not_pull_by_default(provisioner, mock_client):
         provisioner._check_image("test:image")
 
     mock_client.images.pull.assert_not_called()
+
+
+# === provision() ==============================================================
 
 
 def test_provision_happy_path_returns_the_running_container(
@@ -339,12 +342,14 @@ def test_delete_propagates_unexpected_errors(provisioner, mock_container):
         provisioner.delete(mock_container)
 
 
-# === provision(): sandbox_dir ===================================================
+# === provision(): working_dir ===================================================
 
 
-def test_provision_uses_sandbox_dir_for_mkdir(provisioner, mock_client, mock_container):
-    """The spec's sandbox_dir becomes the container's working directory and
-    is the directory that gets created."""
+def test_provision_uses_working_dir_for_container_and_mkdir(
+    provisioner, mock_client, mock_container
+):
+    """The spec's working_dir becomes the container's working directory and is
+    the directory that gets created."""
     custom = ContainerSpec(image="test:image", name="n", working_dir="/my dir")
 
     provisioner.provision(custom)

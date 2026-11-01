@@ -1,7 +1,9 @@
-"""Integration tests for the BaseSandbox helpers (glob, ls, grep, ...) running through
+"""Integration tests for the BaseSandbox helpers (glob, ls, ...) running through
 ContainerSandbox.execute()."""
 
 from __future__ import annotations
+
+from agent_container_sandbox import ContainerSandbox
 
 
 def _many_files(sandbox, count: int = 500) -> None:
@@ -57,3 +59,23 @@ def test_grep_returns_partial_matches_flagged_as_complete_when_output_is_clipped
     assert result.error is None
     assert 0 < len(result.matches) < 500
     assert result.truncated is False
+
+
+def test_without_python_ls_hides_the_failure_and_grep_still_works(
+    make_container, image_without_python
+):
+    """Characterization of upstream behavior, documented in the README.
+
+    ls() runs Python and returns an empty list instead of an error when it is
+    missing; grep() does not need it. If this fails, deepagents changed:
+    update the test and the README's python3 prerequisite.
+    """
+    sandbox = ContainerSandbox(make_container(image=image_without_python))
+    sandbox.upload_files([("f.txt", b"needle\n")])
+
+    ls = sandbox.ls("/workspace")
+    grep = sandbox.grep("needle", "/workspace")
+
+    assert ls.error is None
+    assert ls.entries == []
+    assert [m["path"] for m in grep.matches] == ["/workspace/f.txt"]
