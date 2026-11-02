@@ -7,17 +7,19 @@ the caller; this module never closes it.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import shlex
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from typing import Any
 
 import docker
 from docker.errors import APIError, ImageNotFound
 from docker.models.containers import Container
 
-from .errors import DockerImageNotFound
+from .errors import ContainerNotRunningError, DockerImageNotFound, SpecMismatchError
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +29,10 @@ logger = logging.getLogger(__name__)
 # the caller supplied no labels of their own.
 _MARKER_LABEL_KEY = "created-by"
 _MARKER_LABEL_VALUE = "agent-container-sandbox"
+
+# Hash of the spec a container was created from (see _spec_fingerprint). Set
+# after the marker and the caller's labels, so neither can override it.
+_FINGERPRINT_LABEL_KEY = "agent-container-sandbox.spec-fingerprint"
 
 _DEFAULT_WORKING_DIR = "/workspace"
 _DEFAULT_MAX_LIFETIME_SECONDS = 3600  # hard upper bound; not an idle timeout
@@ -51,11 +57,8 @@ class ContainerSpec:
         labels: Additional labels merged with the module's fixed marker
             label; callers cannot omit or override the marker this way.
 
-    Not covered by this spec: whether ``get_or_create`` verifies that an
-    existing container's configuration actually matches this spec before
-    reusing it. The first implementation reuses by name only; a mismatch
-    (e.g. same name, different image) is a known, documented limitation
-    rather than something this spec tries to detect.
+    ``get_or_create`` reuses an existing container only if it carries the
+    fingerprint of this spec (every field except ``name``) and is running.
     """
 
     image: str
@@ -71,6 +74,21 @@ class ContainerSpec:
     no_new_privileges: bool = True
     cap_drop_all: bool = True
     cap_add: tuple[str, ...] = ()
+
+
+def _spec_fingerprint(spec: ContainerSpec) -> str:
+    """SHA-256 of the spec's canonical JSON, excluding ``name``.
+
+    The name is the lookup key, and ``provision`` generates one when it is
+    None, so including it would stop a container created from a nameless spec
+    from ever matching. ``cap_add`` is sorted because its order is irrelevant;
+    dictionary keys are sorted by the JSON encoder.
+    """
+    data = asdict(spec)
+    data.pop("name")
+    data["cap_add"] = sorted(data["cap_add"])
+    canonical = json.dumps(data, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode()).hexdigest()
 
 
 def _hardening_kwargs(spec: ContainerSpec) -> dict[str, Any]:
@@ -155,7 +173,11 @@ class ContainerProvisioner:
             entrypoint=["sleep", str(spec.max_lifetime_seconds)],
             working_dir=spec.working_dir,
             volumes=spec.volumes,
-            labels={**spec.labels, _MARKER_LABEL_KEY: _MARKER_LABEL_VALUE},
+            labels={
+                **spec.labels,
+                _MARKER_LABEL_KEY: _MARKER_LABEL_VALUE,
+                _FINGERPRINT_LABEL_KEY: _spec_fingerprint(spec),
+            },
             stdin_open=False,
             init=True,
             tty=False,
@@ -195,17 +217,42 @@ class ContainerProvisioner:
         exact = [c for c in candidates if c.name == name]
         return exact[0] if exact else None
 
-    def get_or_create(self, spec: ContainerSpec) -> Container:
-        """Return the existing container named ``spec.name``, or provision one.
+    def _check_reusable(self, container: Container, spec: ContainerSpec) -> None:
+        """Raise unless ``container`` is the running container ``spec`` describes.
 
-        Reuse is by name only; this does not verify that an existing
-        container's image, volumes, or sandbox dir match ``spec`` (see the
-        limitation noted on ``ContainerSpec``).
+        Identity before state: a stopped container with a different spec raises
+        ``SpecMismatchError``, because "just start it" would be wrong advice.
+        """
+        labels = container.labels or {}
+        name = spec.name or ""
+        if labels.get(_MARKER_LABEL_KEY) != _MARKER_LABEL_VALUE:
+            raise SpecMismatchError(name, container, "not_created_by_library")
+        stored = labels.get(_FINGERPRINT_LABEL_KEY)
+        if stored is None:
+            raise SpecMismatchError(name, container, "no_fingerprint")
+        if stored != _spec_fingerprint(spec):
+            raise SpecMismatchError(name, container, "different_spec")
+        if container.status != "running":
+            raise ContainerNotRunningError(name, container, container.status)
+
+    def get_or_create(self, spec: ContainerSpec) -> Container:
+        """Return the running container created from ``spec``, or provision one.
+
+        Looks the container up by ``spec.name``. If one exists, it must carry
+        the library's marker label and the fingerprint of this exact spec, and
+        it must be running. Nothing is started, stopped or deleted on failure.
+
+        Raises:
+            ValueError: ``spec.name`` is empty.
+            SpecMismatchError: The container is not the one this spec describes
+                (see its ``reason``).
+            ContainerNotRunningError: It is the right container but not running.
         """
         if not spec.name:
             raise ValueError("get_or_create requires spec.name; it is the lookup key.")
         container = self.find(spec.name)
         if container:
+            self._check_reusable(container, spec)
             return container
         return self.provision(spec)
 

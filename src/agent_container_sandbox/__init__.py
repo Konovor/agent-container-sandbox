@@ -2,7 +2,15 @@
 
 from importlib.metadata import PackageNotFoundError, version
 
-from .errors import DockerImageNotFound, MissingPythonError, MissingTimeoutError, SandboxError
+from .errors import (
+    ContainerNotRunningError,
+    ContainerReuseError,
+    DockerImageNotFound,
+    MissingPythonError,
+    MissingTimeoutError,
+    SandboxError,
+    SpecMismatchError,
+)
 from .managed import ManagedContainerSandbox
 from .provisioning import ContainerProvisioner, ContainerSpec
 from .sandbox import ContainerSandbox
@@ -20,6 +28,9 @@ __all__ = [
     "DockerImageNotFound",
     "MissingTimeoutError",
     "MissingPythonError",
+    "ContainerReuseError",
+    "SpecMismatchError",
+    "ContainerNotRunningError",
     "ManagedContainerSandbox",
     "__version__",
 ]
