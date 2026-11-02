@@ -14,6 +14,9 @@ EXPECTED_EXPORTS = {
     "DockerImageNotFound",
     "MissingTimeoutError",
     "MissingPythonError",
+    "ContainerReuseError",
+    "SpecMismatchError",
+    "ContainerNotRunningError",
     "ManagedContainerSandbox",
     "__version__",
 }
@@ -40,12 +43,15 @@ def test_star_import_exposes_public_names():
 
 def test_exports_are_the_same_objects_as_in_submodules():
     """Top-level names are re-exports, not accidental copies or shadows."""
-    from agent_container_sandbox import provisioning, sandbox
+    from agent_container_sandbox import errors, provisioning, sandbox
 
     assert agent_container_sandbox.ContainerSandbox is sandbox.ContainerSandbox
     assert agent_container_sandbox.ContainerProvisioner is provisioning.ContainerProvisioner
     assert agent_container_sandbox.ContainerSpec is provisioning.ContainerSpec
     assert agent_container_sandbox.DockerImageNotFound is provisioning.DockerImageNotFound
+    assert agent_container_sandbox.ContainerReuseError is errors.ContainerReuseError
+    assert agent_container_sandbox.SpecMismatchError is errors.SpecMismatchError
+    assert agent_container_sandbox.ContainerNotRunningError is errors.ContainerNotRunningError
 
 
 def test_version_is_a_nonempty_string():
