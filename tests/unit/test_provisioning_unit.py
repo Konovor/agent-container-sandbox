@@ -4,16 +4,43 @@ from __future__ import annotations
 
 import logging
 import re
+from dataclasses import fields
 from unittest.mock import MagicMock
 
 import docker
 import pytest
 
+from agent_container_sandbox.errors import ContainerNotRunningError, SpecMismatchError
 from agent_container_sandbox.provisioning import (
+    _FINGERPRINT_LABEL_KEY,
+    _MARKER_LABEL_KEY,
+    _MARKER_LABEL_VALUE,
     ContainerProvisioner,
     ContainerSpec,
     DockerImageNotFound,
+    _spec_fingerprint,
 )
+
+_OTHER_FINGERPRINT = "0" * 64
+_MARKER = {_MARKER_LABEL_KEY: _MARKER_LABEL_VALUE}
+
+# One alternative value per field, each different from the default. The
+# completeness test below fails when a new ContainerSpec field is missing here.
+_ALTERNATIVES = {
+    "image": "other:image",
+    "volumes": {"/host": {"bind": "/container", "mode": "rw"}},
+    "working_dir": "/other",
+    "max_lifetime_seconds": 60,
+    "labels": {"a": "b"},
+    "mem_limit": "1g",
+    "cpus": 1.0,
+    "network_mode": "bridge",
+    "pids_limit": 64,
+    "no_new_privileges": False,
+    "cap_drop_all": False,
+    "cap_add": ("NET_ADMIN",),
+}
+
 
 # -- Fixtures -----------------------------------------------------------------
 
@@ -272,13 +299,79 @@ def test_find_returns_none_when_no_match(provisioner, mock_client):
     assert result is None
 
 
+# === _spec_fingerprint() ======================================================
+
+
+def test_fingerprint_table_covers_every_spec_field():
+    """A new ContainerSpec field must get an alternative value here (name is
+    excluded from the fingerprint and tested separately)."""
+    assert {f.name for f in fields(ContainerSpec)} == set(_ALTERNATIVES) | {"name"}
+
+
+@pytest.mark.parametrize("field_name", sorted(_ALTERNATIVES))
+def test_fingerprint_changes_when_a_single_field_changes(field_name):
+    base = {"image": "test:image", "name": "n"}
+    changed = {**base, field_name: _ALTERNATIVES[field_name]}
+
+    assert _spec_fingerprint(ContainerSpec(**changed)) != _spec_fingerprint(ContainerSpec(**base))
+
+
+def test_fingerprint_ignores_name():
+    a = ContainerSpec(image="test:image", name="a")
+    b = ContainerSpec(image="test:image", name="b")
+    nameless = ContainerSpec(image="test:image")
+
+    assert _spec_fingerprint(a) == _spec_fingerprint(b) == _spec_fingerprint(nameless)
+
+
+def test_fingerprint_is_stable_across_dict_and_cap_add_order():
+    a = ContainerSpec(
+        image="test:image",
+        volumes={"/x": {"bind": "/a", "mode": "ro"}, "/y": {"bind": "/b", "mode": "rw"}},
+        labels={"one": "1", "two": "2"},
+        cap_add=("CHOWN", "KILL"),
+    )
+    b = ContainerSpec(
+        image="test:image",
+        volumes={"/y": {"mode": "rw", "bind": "/b"}, "/x": {"mode": "ro", "bind": "/a"}},
+        labels={"two": "2", "one": "1"},
+        cap_add=("KILL", "CHOWN"),
+    )
+
+    assert _spec_fingerprint(a) == _spec_fingerprint(b)
+
+
+def test_provision_sets_fingerprint_label(provisioner, mock_client, spec):
+    provisioner.provision(spec)
+
+    labels = mock_client.containers.create.call_args.kwargs["labels"]
+    assert labels[_FINGERPRINT_LABEL_KEY] == _spec_fingerprint(spec)
+    assert labels[_MARKER_LABEL_KEY] == _MARKER_LABEL_VALUE
+
+
+def test_user_labels_cannot_override_marker_or_fingerprint(provisioner, mock_client):
+    spec = ContainerSpec(
+        image="test:image",
+        name="test-container",
+        labels={_FINGERPRINT_LABEL_KEY: "forged", _MARKER_LABEL_KEY: "forged"},
+    )
+
+    provisioner.provision(spec)
+
+    labels = mock_client.containers.create.call_args.kwargs["labels"]
+    assert labels[_FINGERPRINT_LABEL_KEY] == _spec_fingerprint(spec)
+    assert labels[_MARKER_LABEL_KEY] == _MARKER_LABEL_VALUE
+
+
 # === get_or_create() ===========================================================
 
 
 def test_get_or_create_returns_existing_container_without_provisioning(
     provisioner, mock_container, spec
 ):
-    """If find() locates a container, provision() must never run."""
+    """If find() locates a matching, running container, provision() must never run."""
+    mock_container.labels = {**_MARKER, _FINGERPRINT_LABEL_KEY: _spec_fingerprint(spec)}
+    mock_container.status = "running"
     provisioner.find = MagicMock(return_value=mock_container)
     provisioner.provision = MagicMock()
 
@@ -311,6 +404,76 @@ def test_get_or_create_rejects_spec_without_name(provisioner, bad_name):
 
     provisioner.find.assert_not_called()
     provisioner.provision.assert_not_called()
+
+
+def _assert_container_untouched(provisioner, container):
+    provisioner.provision.assert_not_called()
+    provisioner.delete.assert_not_called()
+    container.start.assert_not_called()
+    container.stop.assert_not_called()
+    container.remove.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("labels", "status", "reason"),
+    [
+        ({}, "running", "not_created_by_library"),
+        (None, "running", "not_created_by_library"),
+        ({"other": "x"}, "running", "not_created_by_library"),
+        (_MARKER, "running", "no_fingerprint"),
+        ({**_MARKER, _FINGERPRINT_LABEL_KEY: _OTHER_FINGERPRINT}, "running", "different_spec"),
+        # Identity before state: a stopped container that is the wrong one
+        # must raise SpecMismatchError, not ContainerNotRunningError.
+        ({}, "exited", "not_created_by_library"),
+        (_MARKER, "exited", "no_fingerprint"),
+        ({**_MARKER, _FINGERPRINT_LABEL_KEY: _OTHER_FINGERPRINT}, "exited", "different_spec"),
+    ],
+)
+def test_get_or_create_raises_spec_mismatch(
+    provisioner, mock_container, spec, labels, status, reason
+):
+    mock_container.labels = labels
+    mock_container.status = status
+    provisioner.find = MagicMock(return_value=mock_container)
+    provisioner.provision = MagicMock()
+    provisioner.delete = MagicMock()
+
+    with pytest.raises(SpecMismatchError) as exc_info:
+        provisioner.get_or_create(spec)
+
+    assert exc_info.value.reason == reason
+    assert exc_info.value.container is mock_container
+    _assert_container_untouched(provisioner, mock_container)
+
+
+@pytest.mark.parametrize("status", ["exited", "created", "paused"])
+def test_get_or_create_raises_when_matching_container_is_not_running(
+    provisioner, mock_container, spec, status
+):
+    mock_container.labels = {**_MARKER, _FINGERPRINT_LABEL_KEY: _spec_fingerprint(spec)}
+    mock_container.status = status
+    provisioner.find = MagicMock(return_value=mock_container)
+    provisioner.provision = MagicMock()
+    provisioner.delete = MagicMock()
+
+    with pytest.raises(ContainerNotRunningError) as exc_info:
+        provisioner.get_or_create(spec)
+
+    assert exc_info.value.status == status
+    assert exc_info.value.container is mock_container
+    _assert_container_untouched(provisioner, mock_container)
+
+
+def test_find_does_not_verify_the_container(provisioner, mock_client, mock_container):
+    """find() is a plain lookup: it returns containers without the marker or
+    fingerprint labels, which keeps 'bring your own container' working and
+    lets callers recover from a ContainerReuseError."""
+    mock_container.name = "hand-made"
+    mock_container.labels = {}
+    mock_container.status = "exited"
+    mock_client.containers.list.return_value = [mock_container]
+
+    assert provisioner.find("hand-made") is mock_container
 
 
 # === delete() ===================================================================
