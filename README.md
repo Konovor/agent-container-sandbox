@@ -130,7 +130,7 @@ print(result.exit_code)  # 124
 | `volumes` | `dict` | `{}` | Mounts, e.g. `{"/host": {"bind": "/container", "mode": "rw"}}`. |
 | `working_dir` | `str` | `/workspace` | Working directory. Created if missing. |
 | `max_lifetime_seconds` | `int` | `3600` | Hard upper bound on the container's life (see below). |
-| `labels` | `dict` | `{}` | Extra labels. The marker label below is always added. |
+| `labels` | `dict` | `{}` | Extra labels. The marker label below and a spec fingerprint label are always added and cannot be overridden. |
 | `mem_limit` | `str \| None` | `"2g"` | Memory cap. Swap is capped at the same value. `None` = unlimited. |
 | `cpus` | `float \| None` | `2.0` | CPU cap in cores. `None` = unlimited. |
 | `network_mode` | `str \| None` | `"none"` | Container network mode. `"none"` disables networking. Use `"bridge"` for normal network access. `"host"` shares the host's network stack and removes the isolation. `None` sends nothing, so the daemon's default applies (usually full network access). |
@@ -147,10 +147,28 @@ All fields are keyword-only: write `ContainerSpec(image=IMAGE)`, not `ContainerS
 |--------|-------------|
 | `provision(spec)` | Create and start a new container. Cleans up after itself if setup fails. |
 | `find(name)` | Return the container with exactly this name, or `None`. |
-| `get_or_create(spec)` | Return the existing container named `spec.name`, or provision one. |
+| `get_or_create(spec)` | Return the running container created from this spec, looked up by `spec.name`, or provision one. Raises `SpecMismatchError` or `ContainerNotRunningError` if the existing container does not match or is not running. |
 | `delete(container)` | Stop and remove a container. Tolerates it already being gone. |
 
-**Reusing containers.** `get_or_create` lets several `ContainerSandbox` objects share one container, or attach to one that another process started. A sandbox over an attached container uses that container's own working directory, which may differ from your current spec. `ManagedContainerSandbox` does not reuse containers.
+**Reusing containers.** `get_or_create` lets several `ContainerSandbox` objects share one container, or attach to one that another process started from the same spec. It looks the container up by `spec.name` and hands it out only if it carries the library's marker label and the fingerprint of this exact spec (every field except `name`), and is running. Otherwise it raises and leaves the container as it is: nothing is started, stopped, or deleted. The error carries the container as `e.container`, so you can recover without a second lookup:
+
+```python
+from agent_container_sandbox import ContainerNotRunningError, SpecMismatchError
+
+try:
+    container = provisioner.get_or_create(spec)
+except ContainerNotRunningError as e:
+    e.container.start()  # or provisioner.delete(e.container), then get_or_create(spec) again
+    container = e.container
+except SpecMismatchError as e:
+    # e.reason: "not_created_by_library", "no_fingerprint" or "different_spec"
+    provisioner.delete(e.container)  # only if you are sure it is unused
+    container = provisioner.get_or_create(spec)
+```
+
+A container that is not running is usually one whose `max_lifetime_seconds` has expired. A `SpecMismatchError` means the container is not the one your spec describes, so check what it is before you delete it. Catch `ContainerReuseError` to handle both failures in one place.
+
+`find()` does not verify the container, and `get_or_create()` does. `ContainerSandbox` accepts any running container as it is and does not check its configuration, so the hardening only applies to containers created from a `ContainerSpec`. A sandbox over a container that did not come from your spec uses that container's own working directory, which may differ from your spec. `ManagedContainerSandbox` does not reuse containers.
 
 ### `ManagedContainerSandbox`
 
@@ -257,9 +275,12 @@ Everything the library raises on purpose inherits from `SandboxError`:
 
 ```
 SandboxError
-├── DockerImageNotFound   image missing and could not be pulled (including auth or rate-limit failures); has an .image attribute
-├── MissingTimeoutError   the container cannot run commands under `timeout`
-└── MissingPythonError    the container has no usable `python3`
+├── DockerImageNotFound           image missing and could not be pulled (including auth or rate-limit failures); has an .image attribute
+├── MissingTimeoutError           the container cannot run commands under `timeout`
+├── MissingPythonError            the container has no usable `python3`
+└── ContainerReuseError           get_or_create found the name but will not hand the container out; has .name and .container attributes
+    ├── SpecMismatchError         it is not the container this spec describes; has a .reason attribute
+    └── ContainerNotRunningError  it is the right container, but it is not running; has a .status attribute
 ```
 
 ```python
@@ -275,7 +296,7 @@ Other failures, such as a container that cannot start or a daemon that is unreac
 
 ## Known limitations
 
-- **`get_or_create` reuses by name only.** It does not check that an existing container's image, volumes, working directory, or hardening settings match the spec, and it does not check that the container is running. A container created earlier without limits is returned as is.
+- **`get_or_create` checks the spec, not the live container.** It verifies that the container carries the library's marker label and the fingerprint of the spec, and that it is running. It cannot see settings changed on a live container (for example with `docker update`), a mutable image tag such as `latest` that now points to different content, or a later library version translating the same spec into different Docker arguments.
 - **`get_or_create` is not safe against races.** Two callers creating the same name at the same moment can conflict.
 - **`ls` and `grep` do not report clipped output.** When a listing or a search exceeds `max_output_size`, the deepagents helpers return the part that fit without any signal that results are missing, so the answer looks complete (observed with deepagents 0.7.19 and 0.7.32, reported as [deepagents#7480](https://github.com/langchain-ai/deepagents/issues/7480)). `glob` and `execute` do report truncation. Raise `max_output_size` for large directories or trees.
 - **Network access is all or nothing.** The library can switch networking on or off but cannot restrict it to specific hosts. If the agent needs some access but not all of it, attach the container to a dedicated Docker network or use firewall rules.
