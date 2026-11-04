@@ -12,12 +12,12 @@ You own the Docker client. The library never closes it. You also own the contain
 ## Installation
 
 ```bash
-uv add git+https://github.com/Konovor/agent-container-sandbox
+uv add git+https://github.com/Konovor/agent-container-sandbox@v0.1.0
 ```
 
 **Prerequisites**
 
-- Docker installed and running.
+- Docker installed and running. Podman works through its Docker-compatible socket: point `DOCKER_HOST` at it, and `docker.from_env()` picks it up.
 - An image that provides `sh`, `sleep`, and `timeout` (GNU coreutils). Very minimal images (for example `scratch`-based ones) will not work.
 - `python3` in the image, if you use the file helpers inherited from `BaseSandbox` (`read`, `write`, `edit`, `ls`, `glob`). They run Python inside the container. Without it, `read`, `write`, `edit` and `glob` return an error, but `ls` returns an empty list instead of an error. `grep`, `execute`, `upload_files` and `download_files` do not need it (observed with deepagents 0.7.19 and 0.7.32). `ManagedContainerSandbox` checks for `python3` by default and fails early if it is missing.
 
