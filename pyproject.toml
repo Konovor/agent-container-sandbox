@@ -1,6 +1,6 @@
 [project]
 name = "agent-container-sandbox"
-version = "0.1.0"
+version = "0.1.1"
 description = "Docker container sandbox for LangChain Deep Agents, with the container lifecycle kept separate from the sandbox."
 readme = "README.md"
 license = "MIT"
