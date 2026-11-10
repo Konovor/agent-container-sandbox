@@ -12,8 +12,10 @@ You own the Docker client. The library never closes it. You also own the contain
 ## Installation
 
 ```bash
-uv add git+https://github.com/Konovor/agent-container-sandbox@v0.1.0
+pip install agent-container-sandbox
 ```
+
+or with uv: `uv add agent-container-sandbox`. To install from git instead: `uv add git+https://github.com/Konovor/agent-container-sandbox@v0.1.1`.
 
 **Prerequisites**
 

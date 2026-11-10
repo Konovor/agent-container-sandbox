@@ -36,7 +36,7 @@ The library depends on deepagents' helper internals, so this is the most likely 
 
 ### Publishing
 
-- PyPI: check that the name is free, publish to TestPyPI first, and consider trusted publishing from CI.
+- PyPI: consider trusted publishing from CI, so uploads don't need a hand-made token.
 - A changelog, once there is more than one release to describe.
 
 ## Not planned
