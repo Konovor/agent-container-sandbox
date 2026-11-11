@@ -1,5 +1,6 @@
 """Unit tests for sandbox: no Docker daemon required."""
 
+import inspect
 import io
 import tarfile
 import threading
@@ -7,6 +8,7 @@ from unittest.mock import MagicMock
 
 import docker
 import pytest
+from deepagents.backends.sandbox import BaseSandbox
 
 from agent_container_sandbox import (
     ContainerSandbox,
@@ -425,6 +427,25 @@ def test_constructor_rejects_non_positive_max_output_size(mock_container, bad_va
         ContainerSandbox(mock_container, max_output_size=bad_value)
 
     mock_container.reload.assert_not_called()
+
+
+# === BaseSandbox contract ======================================================
+
+
+def test_is_a_base_sandbox():
+    assert issubclass(ContainerSandbox, BaseSandbox)
+
+
+def test_no_abstract_methods_left(mock_container):
+    assert not getattr(ContainerSandbox, "__abstractmethods__", frozenset())
+    ContainerSandbox(mock_container)  # would raise TypeError if any were left
+
+
+def test_overrides_keep_the_base_signatures():
+    for name in ("execute", "upload_files", "download_files"):
+        ours = inspect.signature(getattr(ContainerSandbox, name))
+        base = inspect.signature(getattr(BaseSandbox, name))
+        assert list(ours.parameters) == list(base.parameters), name
 
 
 # === verify_timeout() / verify_python() ========================================
